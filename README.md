@@ -1,3 +1,5 @@
+https://count.getloli.com/@Jason.Joestar-NIUNIU?name=Jason.Joestar-NIUNIU&theme=asoul&padding=7&offset=0&align=top&scale=1&pixelated=1&darkmode=auto
+
 # 牛牛插件plus使用说明
 
 ## 一、插件简介
