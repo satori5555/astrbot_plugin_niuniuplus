@@ -124,12 +124,10 @@ class NiuniuPlugin(Star):
                 'cooldown': "⏳ {nickname} 请等待{remaining}分钟后再比划",
                 'self_compare': "❌ 不能和自己比划",
                 'win': [
-                    "🎉 {winner} 战胜了 {loser}！\n📈 增加 {gain}cm",
-                    "🏆 {winner} 的牛牛更胜一筹！+{gain}cm"
+                    "🏆 {nickname} 的牛牛更胜一筹！+{gain}cm"
                 ],
                 'lose': [
-                    "😭 {loser} 败给 {winner}\n📉 减少 {loss}cm",
-                    "💔 {loser} 的牛牛不敌对方！-{loss}cm"
+                    "💔 {nickname} 的牛牛不敌对方！-{loss}cm"
                 ],
                 'draw': "🤝 双方势均力敌！",
                 'double_loss': "😱 {nickname1} 和 {nickname2} 的牛牛因过于柔软发生缠绕，长度减半！",
