@@ -409,6 +409,25 @@ class NiuniuPlugin(Star):
         user_data = self.get_user_data(group_id, user_id)
         if not user_data:
             yield event.plain_result("❌ 请先注册牛牛")
+            return
+
+        # 检查是否已在打工
+        if self._is_user_working(group_id, user_id):
+            yield event.plain_result(f"小南娘：{nickname}，你已经在工作中了哦~")
+            return
+
+        # 解析打工时长
+        msg = event.message_str.strip()
+        match = re.search(r'打工\s*(\d+)\s*小时', msg)
+        if not match:
+            yield event.plain_result("❌ 请输入正确的打工时长，例如：打工 2小时")
+            return
+
+        hours = int(match.group(1))
+        if hours <= 0:
+            yield event.plain_result("❌ 打工时长必须大于0小时")
+            return
+            
         if hours > self.MAX_WORK_HOURS:
             yield event.plain_result(f"❌ 单次打工时长不能超过{self.MAX_WORK_HOURS}小时")
             return
