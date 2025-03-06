@@ -1,5 +1,5 @@
 name: niuniuplus # 这是你的插件的唯一识别名。
 desc: 原牛牛插件的升级版，卸载原插件并安装即可 # 插件简短描述
-version: v1.0.3 # 插件版本号。格式：v1.1.1 或者 v1.1
+version: v1.0.4 # 插件版本号。格式：v1.1.1 或者 v1.1
 author: Jason.Joestar # 作者
 repo: https://github.com/advent259141/astrbot_plugin_niuniuplus # 插件的仓库地址
