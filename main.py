@@ -1060,6 +1060,7 @@ class NiuniuPlugin(Star):
 
         # 评价系统
         length = user_data['length']
+        hardness = user_data.get('hardness', 1)  # 获取硬度，默认为1
         length_str = self.format_length(length)
         if length < 12:
             evaluation = random.choice(self.niuniu_texts['my_niuniu']['evaluation']['short'])
@@ -1077,6 +1078,7 @@ class NiuniuPlugin(Star):
         text = self.niuniu_texts['my_niuniu']['info'].format(
             nickname=nickname,
             length=length_str,
+            hardness=hardness,  # 确保传递硬度参数
             evaluation=evaluation
         )
         yield event.plain_result(text)
