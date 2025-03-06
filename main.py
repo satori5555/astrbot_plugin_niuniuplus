@@ -276,16 +276,6 @@ class NiuniuPlugin(Star):
                         nickname = user_data.get('nickname', '')
                         if re.search(re.escape(target_name), nickname, re.IGNORECASE):
                             return user_id
-          elif msg.startswith("锁牛牛"):
-            target_name = msg[len("锁牛牛"):].strip()
-            if target_name:
-                group_id = str(event.message_obj.group_id)
-                group_data = self.get_group_data(group_id)
-                for user_id, user_data in group_data.items():
-                    if isinstance(user_data, dict):  # 检查 user_data 是否为字典
-                        nickname = user_data.get('nickname', '')
-                        if re.search(re.escape(target_name), nickname, re.IGNORECASE):
-                            return user_id                          
         return None
 
     # 在 NiuniuPlugin 类中添加等待消息的辅助方法
