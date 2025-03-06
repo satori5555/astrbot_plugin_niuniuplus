@@ -278,6 +278,28 @@ class NiuniuPlugin(Star):
                             return user_id
         return None
 
+    def parse_lock_target(self, event):
+        """解析锁牛牛的@目标或用户名"""
+        # 先尝试获取@的用户
+        for comp in event.message_obj.message:
+            if isinstance(comp, At):
+                return str(comp.qq)
+                
+        # 如果没有@，则解析消息中的用户名
+        msg = event.message_str.strip()
+        if msg.startswith("锁牛牛"):
+            target_name = msg[len("锁牛牛"):].strip()
+            if target_name:
+                group_id = str(event.message_obj.group_id)
+                group_data = self.get_group_data(group_id)
+                for user_id, user_data in group_data.items():
+                    if not isinstance(user_data, dict) or 'nickname' not in user_data:
+                        continue
+                    nickname = user_data.get('nickname', '')
+                    if nickname and target_name in nickname:
+                        return user_id
+        return None
+
     # 在 NiuniuPlugin 类中添加等待消息的辅助方法
     async def wait_for_message(self, event, check, timeout=30):
         """等待用户回复"""
@@ -387,24 +409,6 @@ class NiuniuPlugin(Star):
         user_data = self.get_user_data(group_id, user_id)
         if not user_data:
             yield event.plain_result("❌ 请先注册牛牛")
-            return
-
-        # 检查是否已在打工
-        if self._is_user_working(group_id, user_id):
-            yield event.plain_result(f"小南娘：{nickname}，你已经在工作中了哦~")
-            return
-
-        # 解析打工时长
-        msg = event.message_str.strip()
-        match = re.search(r'打工\s*(\d+)\s*小时', msg)
-        if not match:
-            yield event.plain_result("❌ 请输入正确的打工时长，例如：打工 2小时")
-            return
-
-        hours = int(match.group(1))
-        if hours <= 0:
-            yield event.plain_result("❌ 打工时长必须大于0小时")
-            return
         if hours > self.MAX_WORK_HOURS:
             yield event.plain_result(f"❌ 单次打工时长不能超过{self.MAX_WORK_HOURS}小时")
             return
@@ -1142,8 +1146,8 @@ class NiuniuPlugin(Star):
             yield event.plain_result(self.niuniu_texts['dajiao']['not_registered'].format(nickname=nickname))
             return
 
-        # 解析目标
-        target_id = self.parse_target(event)
+        # 解析目标 - 使用修复后的parse_lock_target
+        target_id = self.parse_lock_target(event)
         if not target_id:
             yield event.plain_result(self.niuniu_texts['lock']['no_target'].format(nickname=nickname))
             return
