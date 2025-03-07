@@ -409,26 +409,25 @@ class NiuniuPlugin(Star):
         user_data = self.get_user_data(group_id, user_id)
         if not user_data:
             yield event.plain_result("❌ 请先注册牛牛")
-            return  # 添加return以防止后续代码执行
-
-        # 解析打工小时数
-        msg = event.message_str.strip()
-        hours = 1  # 默认1小时
-        if msg.startswith("打工"):
-            try:
-                # 尝试获取小时数
-                time_str = msg[2:].strip()
-                if time_str:
-                    hours = float(time_str)
-                    # 限制为整数或半小时
-                    hours = round(hours * 2) / 2
-            except ValueError:
-                pass  # 使用默认值
-
-        if hours <= 0:
-            yield event.plain_result("❌ 打工时间必须大于0小时")
             return
 
+        # 检查是否已在打工
+        if self._is_user_working(group_id, user_id):
+            yield event.plain_result(f"小南娘：{nickname}，你已经在工作中了哦~")
+            return
+
+        # 解析打工时长
+        msg = event.message_str.strip()
+        match = re.search(r'打工\s*(\d+)\s*小时', msg)
+        if not match:
+            yield event.plain_result("❌ 请输入正确的打工时长，例如：打工 2小时")
+            return
+
+        hours = int(match.group(1))
+        if hours <= 0:
+            yield event.plain_result("❌ 打工时长必须大于0小时")
+            return
+            
         if hours > self.MAX_WORK_HOURS:
             yield event.plain_result(f"❌ 单次打工时长不能超过{self.MAX_WORK_HOURS}小时")
             return
@@ -443,56 +442,53 @@ class NiuniuPlugin(Star):
             yield event.plain_result(f"❌ 今日只能再打工{remaining_hours:.1f}小时")
             return
 
-        # 直接计算并发放金币奖励(修正计算逻辑)
-        total_intervals = int(hours * 3600 // self.WORK_REWARD_INTERVAL)
-        total_coins = total_intervals * self.WORK_REWARD_COINS
+        # 直接计算并发放金币奖励
+        coins_per_hour = (3600 // self.WORK_REWARD_INTERVAL) * self.WORK_REWARD_COINS
+        total_coins = coins_per_hour * hours
+        
+        # 更新用户金币
         user_data['coins'] = user_data.get('coins', 0) + total_coins
         self._save_niuniu_lengths()
-
-        # 记录打工信息到last_actions
+        
+        # 记录打工信息到last_actions (仍然保留打工状态记录，用于限制其他功能使用)
         user_actions = self.last_actions.setdefault(group_id, {}).setdefault(user_id, {})
         user_actions['work_data'] = {
             'start_time': time.time(),
-            'duration': hours,
-            'coins_earned': total_coins  # 记录已经发放的金币数
+            'duration': hours
         }
         self._save_last_actions()
-
-        # 启动打工奖励计时器，只负责结束通知，不再发放金币
-        async def reward_task():
-            try:
-                user_actions = self.last_actions[group_id][user_id]
-                work_data = user_actions['work_data']
-                end_time = work_data['start_time'] + hours * 3600
-                await asyncio.sleep(hours * 3600)  # 直接等待打工结束
-                
-                # 打工结束后发送提醒消息
-                mock_message = AstrBotMessage()
-                mock_message.type = MessageType.GROUP_MESSAGE
-                mock_message.message = [Plain(f"小南娘：{nickname}，你的打工时间结束了，这次一共赚了{total_coins}金币哦~")]
-                mock_message.sender = MessageMember(user_id=user_id)
-                mock_message.self_id = user_id
-                mock_message.session_id = group_id
-                mock_message.group_id = group_id
-                mock_message.message_str = f"小南娘：{nickname}，你的打工时间结束了，这次一共赚了{total_coins}金币哦~"
-                
-                mock_event = AstrMessageEvent(
-                    message_str=mock_message.message_str,
-                    message_obj=mock_message,
-                    platform_meta=PlatformMetadata(
-                        name="aiocqhttp",
-                        description="模拟的aiocqhttp平台"
-                    ),
-                    session_id=group_id
-                )
-                
-                # 发送提醒消息
-                await self.context.send_message(mock_event)
-            except Exception as e:
-                print(f"打工任务出错: {str(e)}")
         
-        asyncio.create_task(reward_task())
-        yield event.plain_result(f"小南娘：{nickname}又出来yj啦，这次要陪客户{hours}小时，预计可以赚到{total_coins}金币哦~")
+        # 发送完成消息
+        yield event.plain_result(f"小南娘：{nickname}要去陪客户{hours}小时，已经提前拿到{total_coins}金币啦~\n现在金币余额：{user_data['coins']}💰\n(打工期间无法使用其他牛牛功能)")
+
+        # 启动打工状态计时器 (只用于结束后发送提醒)
+        async def work_timer():
+            await asyncio.sleep(hours * 3600)
+            
+            # 打工结束后发送提醒消息
+            mock_message = AstrBotMessage()
+            mock_message.type = MessageType.GROUP_MESSAGE
+            mock_message.message = [Plain(f"小南娘：{nickname}，你的工作时间结束了哦~")]
+            mock_message.sender = MessageMember(user_id=user_id)
+            mock_message.self_id = user_id
+            mock_message.session_id = group_id
+            mock_message.group_id = group_id
+            mock_message.message_str = f"小南娘：{nickname}，你的工作时间结束了哦~"
+            
+            mock_event = AstrMessageEvent(
+                message_str=mock_message.message_str,
+                message_obj=mock_message,
+                platform_meta=PlatformMetadata(
+                    name="aiocqhttp",
+                    description="模拟的aiocqhttp平台"
+                ),
+                session_id=group_id
+            )
+            
+            # 发送提醒消息
+            await self.context.send_message(mock_event)
+        
+        asyncio.create_task(work_timer())
 
     async def _check_work_time(self, event):
         """查看打工时间"""
