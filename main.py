@@ -11,9 +11,14 @@ from astrbot.api.all import *
 
 # 添加当前目录到系统路径
 current_dir = os.path.dirname(os.path.abspath(__file__))
-if current_dir not in sys.path:
+if (current_dir not in sys.path):
     sys.path.append(current_dir)
 from sign_image import SignImageGenerator
+
+# 添加商城模块导入
+from niuniu_shop import NiuniuShop
+# 添加定时测试模块导入
+from timer_test import TimerTest
 
 # 常量定义
 PLUGIN_DIR = os.path.join('data', 'plugins', 'astrbot_plugin_niuniu')
@@ -45,6 +50,10 @@ class NiuniuPlugin(Star):
         self.last_actions = self._load_last_actions()
         self.admins = self._load_admins()  # 加载管理员列表
         self.working_users = {}  # {str(group_id): {str(user_id): {start_time: float, duration: int}}}
+        # 初始化商城实例
+        self.shop = NiuniuShop(self)
+        # 初始化定时测试模块
+        self.timer_test = TimerTest(context)
 
     # region 数据管理
     def _create_niuniu_lengths_file(self):
@@ -326,9 +335,52 @@ class NiuniuPlugin(Star):
         group_id = str(event.message_obj.group_id)
         msg = event.message_str.strip()
 
+        # 添加独立测试命令，不需要牛牛插件启用
+        if msg == "定时测试":
+            async for result in self.timer_test.test_timer(event):
+                yield result
+            return
+            
+        # 添加可以指定时间的定时测试
+        match = re.match(r'^定时测试\s+(\d+)(?:分钟)?$', msg)
+        if match:
+            minutes = int(match.group(1))
+            if 1 <= minutes <= 60:  # 限制在1-60分钟之间
+                async for result in self.timer_test.test_timer(event, minutes):
+                    yield result
+                return
+            else:
+                yield event.plain_result("⚠️ 定时测试时间需要在1-60分钟之间")
+                return
+
+        # 添加1分钟测试命令
+        if msg == "1分钟":
+            async for result in self._work_test(event):
+                yield result
+            return
+
         # 添加购买命令的处理
         if msg.startswith("购买"):
-            async for result in self._show_shop(event):
+            # 将购买命令直接传递给shop模块处理
+            async for result in self.shop.process_purchase_command(event):
+                yield result
+            return
+        
+        # 添加绝育命令处理
+        if msg.startswith("绝育"):
+            async for result in self._handle_sterilization(event):
+                yield result
+            return
+            
+        # 添加解锁命令处理
+        if msg == "解锁绝育":
+            async for result in self.shop.unlock_sterilization(event):
+                yield result
+            return
+            
+        # 添加调换命令处理
+        if msg.startswith("调换"):
+            async for result in self._handle_exchange(event):
                 yield result
             return
 
@@ -403,54 +455,89 @@ class NiuniuPlugin(Star):
 
         group_data = self.get_group_data(group_id)
         if not group_data.get('plugin_enabled', False):
-            yield event.plain_result("❌ 插件未启用")
+            chain = [
+                At(qq=event.get_sender_id()),
+                Plain("\n❌ 插件未启用")
+            ]
+            yield event.chain_result(chain)
             return
 
         user_data = self.get_user_data(group_id, user_id)
         if not user_data:
-            yield event.plain_result("❌ 请先注册牛牛")
+            chain = [
+                At(qq=event.get_sender_id()),
+                Plain("\n❌ 请先注册牛牛")
+            ]
+            yield event.chain_result(chain)
             return
 
-        # 检查是否已在打工
+        # 检查是否已在打工中
         if self._is_user_working(group_id, user_id):
-            yield event.plain_result(f"小南娘：{nickname}，你已经在工作中了哦~")
+            chain = [
+                At(qq=event.get_sender_id()),
+                Plain(f"\n小南娘：{nickname}，你已经在工作中了哦~")
+            ]
+            yield event.chain_result(chain)
             return
 
         # 解析打工时长
         msg = event.message_str.strip()
         match = re.search(r'打工\s*(\d+)\s*小时', msg)
         if not match:
-            yield event.plain_result("❌ 请输入正确的打工时长，例如：打工 2小时")
+            chain = [
+                At(qq=event.get_sender_id()),
+                Plain("\n❌ 请输入正确的打工时长，例如：打工 2小时")
+            ]
+            yield event.chain_result(chain)
             return
 
         hours = int(match.group(1))
         if hours <= 0:
-            yield event.plain_result("❌ 打工时长必须大于0小时")
+            chain = [
+                At(qq=event.get_sender_id()),
+                Plain("\n❌ 打工时长必须大于0小时")
+            ]
+            yield event.chain_result(chain)
             return
             
         if hours > self.MAX_WORK_HOURS:
-            yield event.plain_result(f"❌ 单次打工时长不能超过{self.MAX_WORK_HOURS}小时")
+            chain = [
+                At(qq=event.get_sender_id()),
+                Plain(f"\n❌ 单次打工时长不能超过{self.MAX_WORK_HOURS}小时")
+            ]
+            yield event.chain_result(chain)
             return
 
         # 检查每日打工时长限制
         daily_work_time = self._get_daily_work_time(group_id, user_id)
         remaining_hours = self.MAX_WORK_HOURS - daily_work_time
         if remaining_hours <= 0:
-            yield event.plain_result(f"❌ 今日打工时长已达上限{self.MAX_WORK_HOURS}小时")
+            chain = [
+                At(qq=event.get_sender_id()),
+                Plain(f"\n❌ 今日打工时长已达上限{self.MAX_WORK_HOURS}小时")
+            ]
+            yield event.chain_result(chain)
             return
         if hours > remaining_hours:
-            yield event.plain_result(f"❌ 今日只能再打工{remaining_hours:.1f}小时")
+            chain = [
+                At(qq=event.get_sender_id()),
+                Plain(f"\n❌ 今日只能再打工{remaining_hours:.1f}小时")
+            ]
+            yield event.chain_result(chain)
             return
 
+        # 获取打工倍率（变性状态下翻倍）
+        multiplier = self.shop.get_work_multiplier(group_id, user_id)
+        
         # 直接计算并发放金币奖励
         coins_per_hour = (3600 // self.WORK_REWARD_INTERVAL) * self.WORK_REWARD_COINS
-        total_coins = coins_per_hour * hours
+        total_coins = int(coins_per_hour * hours * multiplier)
         
         # 更新用户金币
         user_data['coins'] = user_data.get('coins', 0) + total_coins
         self._save_niuniu_lengths()
         
-        # 记录打工信息到last_actions (仍然保留打工状态记录，用于限制其他功能使用)
+        # 记录打工信息到last_actions
         user_actions = self.last_actions.setdefault(group_id, {}).setdefault(user_id, {})
         user_actions['work_data'] = {
             'start_time': time.time(),
@@ -458,40 +545,36 @@ class NiuniuPlugin(Star):
         }
         self._save_last_actions()
         
-        # 发送完成消息
-        yield event.plain_result(f"小南娘：{nickname}要去陪客户{hours}小时，已经提前拿到{total_coins}金币啦~\n现在金币余额：{user_data['coins']}💰\n(打工期间无法使用其他牛牛功能)")
-
-        # 启动打工状态计时器 (只用于结束后发送提醒)
-        async def work_timer():
-            await asyncio.sleep(hours * 3600)
-            
-            # 打工结束后发送提醒消息
-            mock_message = AstrBotMessage()
-            mock_message.type = MessageType.GROUP_MESSAGE
-            mock_message.message = [Plain(f"小南娘：{nickname}，你的工作时间结束了哦~")]
-            mock_message.sender = MessageMember(user_id=user_id)
-            mock_message.self_id = user_id
-            mock_message.session_id = group_id
-            mock_message.group_id = group_id
-            mock_message.message_str = f"小南娘：{nickname}，你的工作时间结束了哦~"
-            
-            mock_event = AstrMessageEvent(
-                message_str=mock_message.message_str,
-                message_obj=mock_message,
-                platform_meta=PlatformMetadata(
-                    name="aiocqhttp",
-                    description="模拟的aiocqhttp平台"
-                ),
-                session_id=group_id
-            )
-            
-            # 发送提醒消息
-            await self.context.send_message(mock_event)
+        # 储存打工结束消息的会话ID
+        unified_msg_origin = event.unified_msg_origin
         
-        asyncio.create_task(work_timer())
+        # 发送开始打工的消息
+        chain = [
+            At(qq=event.get_sender_id()),
+            Plain(f"\n小南娘：{nickname}要去陪客户{hours}小时，已经提前拿到{total_coins}金币啦~\n现在金币余额：{user_data['coins']}💰\n(打工期间无法使用其他牛牛功能)")
+        ]
+        yield event.chain_result(chain)
 
-    async def _check_work_time(self, event):
-        """查看打工时间"""
+        # 创建并存储异步任务，使用与timer_test相似的方式
+        task_id = f"work_{group_id}_{user_id}_{int(time.time())}"
+        task = asyncio.create_task(self._work_timer_improved(
+            group_id=group_id,
+            user_id=user_id,
+            nickname=nickname,
+            unified_msg_origin=unified_msg_origin,
+            delay_seconds=int(hours * 3600)
+        ))
+        
+        # 存储任务引用，防止被垃圾回收
+        if not hasattr(self, '_work_tasks'):
+            self._work_tasks = {}
+        self._work_tasks[task_id] = task
+        
+        # 设置清理回调
+        task.add_done_callback(lambda t: self._work_tasks.pop(task_id, None))
+
+    async def _work_test(self, event):
+        """打工测试功能 - 1分钟后自动完成"""
         group_id = str(event.message_obj.group_id)
         user_id = str(event.get_sender_id())
         nickname = event.get_sender_name()
@@ -501,11 +584,118 @@ class NiuniuPlugin(Star):
             yield event.plain_result("❌ 插件未启用")
             return
 
+        user_data = self.get_user_data(group_id, user_id)
+        if not user_data:
+            yield event.plain_result("❌ 请先注册牛牛")
+            return
+
+        # 检查是否已在打工中
+        if self._is_user_working(group_id, user_id):
+            yield event.plain_result(f"小南娘：{nickname}，你已经在工作中了哦~")
+            return
+
+        # 固定1分钟测试时间
+        minutes = 1
+        hours = minutes / 60
+        
+        # 获取打工倍率（变性状态下翻倍）
+        multiplier = self.shop.get_work_multiplier(group_id, user_id)
+        
+        # 直接计算并发放金币奖励
+        coins_per_hour = (3600 // self.WORK_REWARD_INTERVAL) * self.WORK_REWARD_COINS
+        total_coins = int(coins_per_hour * hours * multiplier)
+        
+        # 更新用户金币
+        user_data['coins'] = user_data.get('coins', 0) + total_coins
+        self._save_niuniu_lengths()
+        
+        # 记录打工信息到last_actions
+        user_actions = self.last_actions.setdefault(group_id, {}).setdefault(user_id, {})
+        user_actions['work_data'] = {
+            'start_time': time.time(),
+            'duration': hours,
+            'is_test': True  # 标记为测试
+        }
+        self._save_last_actions()
+        
+        # 储存打工结束消息的会话ID
+        unified_msg_origin = event.unified_msg_origin
+        
+        # 发送开始打工的消息
+        yield event.plain_result(f"🧪 测试模式：{nickname}开始打工测试，将在{minutes}分钟后结束。\n💰 获得{total_coins}金币\n现在金币余额：{user_data['coins']}💰")
+
+        # 创建并存储异步任务，使用与timer_test相似的方式
+        task_id = f"work_test_{group_id}_{user_id}_{int(time.time())}"
+        task = asyncio.create_task(self._work_timer_improved(
+            group_id=group_id,
+            user_id=user_id,
+            nickname=nickname,
+            unified_msg_origin=unified_msg_origin,
+            delay_seconds=int(minutes * 60)
+        ))
+        
+        # 存储任务引用，防止被垃圾回收
+        if not hasattr(self, '_work_tasks'):
+            self._work_tasks = {}
+        self._work_tasks[task_id] = task
+        
+        # 设置清理回调
+        task.add_done_callback(lambda t: self._work_tasks.pop(task_id, None))
+
+    async def _work_timer_improved(self, group_id, user_id, nickname, unified_msg_origin, delay_seconds):
+        """改进版的打工定时器，采用与定时测试相同的实现方式"""
+        try:
+            # 等待指定时间
+            await asyncio.sleep(delay_seconds)
+            
+            # 构建消息链
+            message_chain = MessageChain([
+                At(qq=user_id),
+                Plain(f" 小南娘：{nickname}，你的工作时间结束了哦~")
+            ])
+            
+            # 直接发送消息
+            await self.context.send_message(unified_msg_origin, message_chain)
+            
+            # 记录日志
+            self.context.logger.info(f"已向用户 {user_id} 发送打工结束提醒")
+            
+            # 清理用户的打工状态
+            try:
+                user_actions = self.last_actions.get(group_id, {}).get(user_id, {})
+                if 'work_data' in user_actions:
+                    del user_actions['work_data']
+                    self._save_last_actions()
+            except Exception as e:
+                self.context.logger.error(f"清理打工状态失败: {e}")
+                
+        except Exception as e:
+            self.context.logger.error(f"打工定时器执行异常: {e}")
+
+    async def _check_work_time(self, event):
+        """查看打工时间"""
+        group_id = str(event.message_obj.group_id)
+        user_id = str(event.get_sender_id())
+        nickname = event.get_sender_name()
+
+        group_data = self.get_group_data(group_id)
+        if not group_data.get('plugin_enabled', False):
+            chain = [
+                At(qq=event.get_sender_id()),
+                Plain("\n❌ 插件未启用")
+            ]
+            yield event.chain_result(chain)
+            return
+
         user_actions = self.last_actions.setdefault(group_id, {}).setdefault(user_id, {})
         work_data = user_actions.get('work_data')
         
         if not work_data or not self._is_user_working(group_id, user_id):
-            yield event.plain_result(f"小南娘：{nickname}，你现在没有在工作哦~")
+            chain = [
+                At(qq=event.get_sender_id()),
+                Plain(f"\n小南娘：{nickname}，你现在没有在工作哦~")
+            ]
+            yield event.chain_result(chain)
             return
 
         current_time = time.time()
@@ -515,7 +705,11 @@ class NiuniuPlugin(Star):
         remaining_hours = int(remaining_seconds // 3600)
         remaining_minutes = int((remaining_seconds % 3600) // 60)
 
-        yield event.plain_result(f"小南娘：{nickname}，客户还要和你快乐{remaining_hours}小时{remaining_minutes}分哦~")
+        chain = [
+            At(qq=event.get_sender_id()),
+            Plain(f"\n小南娘：{nickname}，客户还要和你快乐{remaining_hours}小时{remaining_minutes}分哦~")
+        ]
+        yield event.chain_result(chain)
 
     # endregion
 
@@ -573,7 +767,6 @@ class NiuniuPlugin(Star):
         )
         yield event.plain_result(text)
 
-    # 在 _dajiao 方法中修改伟哥效果的判断部分
     async def _dajiao(self, event):
         """打胶功能"""
         group_id = str(event.message_obj.group_id)
@@ -596,28 +789,25 @@ class NiuniuPlugin(Star):
             yield event.plain_result(f"小南娘：{nickname}，服务的时候要认真哦！")
             return
 
+        # 检查是否被绝育
+        if self.shop.is_sterilized(group_id, user_id):
+            yield event.plain_result(f"❌ {nickname}，你已被绝育，需要花费150金币解锁")
+            return
+
         # 获取当前时间(移到前面)
         current_time = time.time()
         
         # 冷却检查
         last_time = self.last_actions.setdefault(group_id, {}).get(user_id, {}).get('dajiao', 0)
         
+        # 先检查伟哥效果
         items = user_data.get('items', {})
         if items.get('viagra', 0) > 0:
-            # 伟哥效果：直接跳过冷却检查,且必定增加双倍长度
-            change = random.randint(10, 20)  # 原来的2-5翻倍为10-20
-            user_data['length'] += change
-            items['viagra'] -= 1
-            text = f"💊 伟哥生效！牛牛增加{change}cm！\n还剩{items['viagra']}次效果"
-            
-            # 更新最后打胶时间
-            self.last_actions.setdefault(group_id, {}).setdefault(user_id, {})['dajiao'] = current_time
-            self._save_last_actions()
-            self._save_niuniu_lengths()
-            
-            yield event.plain_result(f"{text}\n当前长度：{self.format_length(user_data['length'])}")
+            # 移除伟哥逻辑，使用商城模块的效果
+            async for result in self.shop.process_purchase(event, 1):
+                yield result
             return
-        
+
         # 普通打胶的冷却检查
         on_cooldown, remaining = self.check_cooldown(last_time, self.COOLDOWN_10_MIN)
         if on_cooldown:
@@ -758,91 +948,21 @@ class NiuniuPlugin(Star):
             yield event.plain_result("❌ 请先注册牛牛")
             return
 
-        # 检查是否是购买命令
-        msg = event.message_str.strip()
-        if msg.startswith("购买"):
-            # 检查用户是否在打工中
-            if self._is_user_working(group_id, user_id):
-                yield event.plain_result(f"小南娘：{nickname}，服务的时候不能购买商品哦！")
-                return
-
-            try:
-                item_id = int(msg[2:].strip())
-                if item_id in [1, 2, 3]:
-                    async for result in self._process_purchase(event, item_id):
-                        yield result
-                else:
-                    yield event.plain_result("❌ 无效的商品编号")
-            except ValueError:
-                pass
+        # 检查用户是否在打工中
+        if self._is_user_working(group_id, user_id):
+            yield event.plain_result(f"小南娘：{nickname}，服务的时候不能购买商品哦！")
             return
 
         # 显示商城信息
-        shop_text = (
-            "🏪 牛牛商城\n"
-            "1️⃣ 伟哥 - 80金币\n"
-            "   无视冷却连续打胶5次，且长度不会变短\n"
-            "2️⃣ 男科手术 - 100金币\n"
-            "   75%概率长度翻倍，25%概率减半并获得50金币补偿\n"
-            "3️⃣ 六味地黄丸 - 20金币\n"
-            "   下次比划必胜\n"
-            f"💰 你的金币：{user_data.get('coins', 0)}\n"
-            "🕒 发送\"购买1\"、\"购买2\"或\"购买3\"购买对应道具"
-        )
+        shop_text = self.shop.get_shop_text(user_data.get('coins', 0))
         yield event.plain_result(shop_text)
 
     async def _process_purchase(self, event, item_id):
         """处理购买请求"""
-        group_id = str(event.message_obj.group_id)
-        user_id = str(event.get_sender_id())
-        user_data = self.get_user_data(group_id, user_id)
+        # 直接使用商城模块处理购买
+        async for result in self.shop.process_purchase(event, item_id):
+            yield result
 
-        if not user_data:
-            yield event.plain_result("❌ 请先注册牛牛")
-            return
-
-        coins = user_data.get('coins', 0)
-        items = user_data.setdefault('items', {'viagra': 0, 'surgery': False, 'pills': False})
-
-        if item_id == 1:  # 伟哥
-            if coins < 80:
-                yield event.plain_result("❌ 金币不足")
-                return
-            user_data['coins'] -= 80
-            items['viagra'] = 5
-            yield event.plain_result("✅ 购买成功！获得5次伟哥效果")
-
-        elif item_id == 2:  # 男科手术
-            if coins < 100:
-                yield event.plain_result("❌ 金币不足")
-                return
-            user_data['coins'] -= 100
-            if random.random() < 0.75:  # 75%成功率
-                user_data['length'] *= 2
-                yield event.plain_result(
-                    f"🎉 手术成功！牛牛长度翻倍！\n"
-                    f"📏 现在长度：{self.format_length(user_data['length'])}"
-                )
-            else:
-                user_data['length'] = max(1, user_data['length'] // 2)
-                user_data['coins'] += 50
-                yield event.plain_result(
-                    f"💔 手术失败！牛牛变短一半..获得50金币补偿\n"
-                    f"📏 现在长度：{self.format_length(user_data['length'])}\n"
-                    f"💰 现有金币：{user_data['coins']}"
-                )
-
-        elif item_id == 3:  # 六味地黄丸
-            if coins < 20:
-                yield event.plain_result("❌ 金币不足")
-                return
-            user_data['coins'] -= 20
-            items['pills'] = True
-            yield event.plain_result("✅ 购买成功！下次比划必胜")
-
-        self._save_niuniu_lengths()
-        
-    # 在 _compare 方法中添加六味地黄丸效果判断
     async def _compare(self, event):
         """比划功能"""
         group_id = str(event.message_obj.group_id)
@@ -913,6 +1033,11 @@ class NiuniuPlugin(Star):
         # 更新冷却时间和比划次数
         compare_records[target_id] = current_time
         compare_records['count'] = compare_count + 1
+
+        # 检查目标是否有贞操锁
+        if self.shop.has_chastity_lock(group_id, target_id):
+            yield event.plain_result(f"❌ {target_data['nickname']}装备了贞操锁，无法被比划")
+            return
 
         # 计算胜负
         u_len = user_data['length']
@@ -1286,3 +1411,4 @@ class NiuniuPlugin(Star):
         except Exception as e:
             print(f"生成签到日历失败: {str(e)}")
             yield event.plain_result(f"❌ {nickname}，生成签到日历失败了")
+
