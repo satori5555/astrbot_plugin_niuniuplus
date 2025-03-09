@@ -794,31 +794,46 @@ class NiuniuPlugin(Star):
             yield event.plain_result(f"❌ {nickname}，你已被绝育，需要花费150金币解锁")
             return
 
-        # 获取当前时间(移到前面)
+        # 获取当前时间
         current_time = time.time()
         
         # 冷却检查
         last_time = self.last_actions.setdefault(group_id, {}).get(user_id, {}).get('dajiao', 0)
-        
-        # 先检查伟哥效果
-        items = user_data.get('items', {})
-        if items.get('viagra', 0) > 0:
-            # 移除伟哥逻辑，使用商城模块的效果
-            async for result in self.shop.process_purchase(event, 1):
-                yield result
-            return
-
-        # 普通打胶的冷却检查
         on_cooldown, remaining = self.check_cooldown(last_time, self.COOLDOWN_10_MIN)
+        
+        # 如果在冷却中，检查是否有伟哥可用
         if on_cooldown:
-            mins = int(remaining // 60) + 1
-            text = random.choice(self.niuniu_texts['dajiao']['cooldown']).format(
-                nickname=nickname,
-                remaining=mins
-            )
-            yield event.plain_result(text)
-            return
-
+            # 尝试使用伟哥
+            viagra_remaining = self.shop.use_viagra_for_dajiao(group_id, user_id)
+            if viagra_remaining is not False:  # 伟哥使用成功，返回剩余次数
+                # 伟哥效果固定增加长度10-20cm
+                change = random.randint(10, 20)
+                user_data['length'] += change
+                # 更新最后打胶时间，但不影响冷却（伟哥特性）
+                self.last_actions.setdefault(group_id, {}).setdefault(user_id, {})['last_viagra_use'] = current_time
+                self._save_last_actions()
+                self._save_niuniu_lengths()
+                
+                # 添加剩余次数提示
+                remaining_text = f"剩余{viagra_remaining}次" if viagra_remaining > 0 else "已用完"
+                
+                yield event.plain_result(
+                    f"💊 使用伟哥打胶成功！({remaining_text})\n"
+                    f"📏 长度增加: +{change}cm\n"
+                    f"💪 当前长度: {self.format_length(user_data['length'])}"
+                )
+                return
+            else:
+                # 没有伟哥且在冷却中，提示等待
+                mins = int(remaining // 60) + 1
+                text = random.choice(self.niuniu_texts['dajiao']['cooldown']).format(
+                    nickname=nickname,
+                    remaining=mins
+                )
+                yield event.plain_result(text)
+                return
+        
+        # 正常打胶逻辑（不在冷却或已过冷却）
         # 计算变化
         change = 0
         elapsed = current_time - last_time
@@ -911,7 +926,7 @@ class NiuniuPlugin(Star):
             sign_image_path = sign_generator.create_sign_image(nickname, coins, group_id)
             
             # 发送签到图片
-            if os.path.exists(sign_image_path):
+            if (os.path.exists(sign_image_path)):
                 yield event.image_result(sign_image_path)
             else:
                 # 如果图片生成失败，发送文本消息
@@ -1302,6 +1317,11 @@ class NiuniuPlugin(Star):
         if not target_data:
             yield event.plain_result(self.niuniu_texts['lock']['target_not_registered'])
             return
+            
+        # 检查目标是否有贞操锁
+        if self.shop.has_chastity_lock(group_id, target_id):
+            yield event.plain_result(f"❌ {target_data['nickname']}装备了贞操锁，无法被锁牛牛")
+            return
 
         # 获取用户的锁定记录
         current_time = time.time()
@@ -1411,4 +1431,138 @@ class NiuniuPlugin(Star):
         except Exception as e:
             print(f"生成签到日历失败: {str(e)}")
             yield event.plain_result(f"❌ {nickname}，生成签到日历失败了")
+
+    async def _handle_exchange(self, event):
+        """处理牛子转换器调换指令"""
+        group_id = str(event.message_obj.group_id)
+        user_id = str(event.get_sender_id())
+        user_data = self.get_user_data(group_id, user_id)
+        nickname = event.get_sender_name()
+        
+        # 检查用户是否等待使用牛子转换器
+        if not self.last_actions.get(group_id, {}).get(user_id, {}).get('waiting_for_exchange'):
+            yield event.plain_result("❌ 请先购买牛子转换器")
+            return
+            
+        # 解析目标用户
+        target_id = self.shop.parse_target(event, "调换")
+        if not target_id:
+            yield event.plain_result("❌ 请指定有效的目标用户 (@用户 或 输入用户名)")
+            return
+            
+        # 不能对自己使用
+        if target_id == user_id:
+            yield event.plain_result("❌ 不能与自己交换牛牛")
+            return
+            
+        # 使用转换器
+        async for result in self.shop.use_exchanger(event, target_id):
+            yield result
+            
+    async def _handle_lock(self, event):
+        """处理锁牛牛指令"""
+        group_id = str(event.message_obj.group_id)
+        user_id = str(event.get_sender_id())
+        user_data = self.get_user_data(group_id, user_id)
+        nickname = event.get_sender_name()
+        
+        # 获取目标用户
+        target_id = None
+        for comp in event.message_obj.message:
+            if isinstance(comp, At):
+                target_id = str(comp.qq)
+                break
+                
+        if not target_id:
+            # 尝试从消息中解析用户名
+            msg = event.message_str.strip()
+            if msg.startswith("锁牛牛"):
+                target_name = msg[3:].strip()
+                if target_name:
+                    # 在群数据中查找匹配用户名的用户
+                    group_data = self.get_group_data(group_id)
+                    for uid, udata in group_data.items():
+                        if not isinstance(udata, dict):
+                            continue
+                        if udata.get('nickname', '') and target_name in udata.get('nickname', ''):
+                            target_id = uid
+                            break
+        
+        if not target_id:
+            yield event.plain_result("❌ 请指定要锁牛牛的用户")
+            return
+            
+        # 检查目标用户是否存在
+        target_data = self.get_user_data(group_id, target_id)
+        if not target_data:
+            yield event.plain_result("❌ 目标用户未注册牛牛")
+            return
+            
+        # 不能锁自己
+        if target_id == user_id:
+            yield event.plain_result("❌ 不能锁自己的牛牛")
+            return
+            
+        # 检查目标是否有贞操锁
+        if self.shop.has_chastity_lock(group_id, target_id):
+            yield event.plain_result(f"❌ {target_data['nickname']}装备了贞操锁，无法被锁牛牛")
+            return
+            
+        # 检查冷却时间
+        current_time = time.time()
+        last_lock = self.last_actions.get(group_id, {}).get(user_id, {}).get('lock', 0)
+        if current_time - last_lock < self.LOCK_COOLDOWN:
+            remaining = int(self.LOCK_COOLDOWN - (current_time - last_lock))
+            yield event.plain_result(f"❌ 锁牛牛冷却中，还需等待{remaining}秒")
+            return
+            
+        # 检查目标是否被锁
+        if 'locked_until' in target_data and target_data['locked_until'] > current_time:
+            remaining = int(target_data['locked_until'] - current_time)
+            yield event.plain_result(f"❌ 该用户已被锁，还剩{remaining}秒")
+            return
+            
+        # 执行锁牛牛
+        lock_time = 60 * 10  # 锁10分钟
+        target_data['locked_until'] = current_time + lock_time
+        target_data['locked_by'] = user_id
+        
+        # 记录使用时间
+        self.last_actions.setdefault(group_id, {}).setdefault(user_id, {})['lock'] = current_time
+        
+        # 保存数据
+        self._save_niuniu_lengths()
+        self._save_last_actions()
+        
+        result = (
+            f"🔒 {nickname} 成功锁住了 {target_data['nickname']} 的牛牛！\n"
+            f"锁定时间：10分钟"
+        )
+        yield event.plain_result(result)
+        
+    async def _handle_dajiao(self, event):
+        """处理打胶指令"""
+        group_id = str(event.message_obj.group_id)
+        user_id = str(event.get_sender_id())
+        user_data = self.get_user_data(group_id, user_id)
+        nickname = event.get_sender_name()
+        
+        # 打胶相关代码...
+        
+        # 检查是否拥有伟哥并使用
+        current_time = time.time()
+        last_dajiao = self.last_actions.get(group_id, {}).get(user_id, {}).get('dajiao', 0)
+        cooldown_passed = current_time - last_dajiao >= self.COOLDOWN_10_MIN
+        
+        if not cooldown_passed and self.shop.use_viagra_for_dajiao(group_id, user_id):
+            # 伟哥效果：无视冷却
+            cooldown_passed = True
+        
+        if not cooldown_passed:
+            # 冷却时间未过
+            remaining = int(self.COOLDOWN_10_MIN - (current_time - last_dajiao))
+            yield event.plain_result(f"❌ 打胶冷却中，还需等待{remaining}秒")
+            return
+            
+        # 剩余的打胶逻辑...
 

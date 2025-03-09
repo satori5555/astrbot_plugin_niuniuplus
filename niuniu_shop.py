@@ -345,6 +345,11 @@ class NiuniuShop:
         if target_data.get('items', {}).get('chastity_lock'):
             yield event.plain_result(f"❌ {target_data['nickname']}装备了贞操锁，无法交换牛子")
             return
+        
+        # 检查自己是否和目标用户相同
+        if user_id == target_id:
+            yield event.plain_result("❌ 不能与自己交换牛子")
+            return
             
         # 交换长度
         user_length = user_data['length']
@@ -426,6 +431,26 @@ class NiuniuShop:
                     if nickname and target_name in nickname:
                         return user_id
         return None
+        
+    def use_viagra_for_dajiao(self, group_id, user_id):
+        """使用伟哥进行打胶"""
+        user_data = self.plugin.get_user_data(group_id, user_id)
+        if not user_data or 'items' not in user_data:
+            return False
+        
+        # 检查用户是否有伟哥
+        if 'viagra' not in user_data['items'] or user_data['items']['viagra'] <= 0:
+            return False
+            
+        # 消耗一次伟哥次数
+        user_data['items']['viagra'] -= 1
+        remaining = user_data['items']['viagra']
+        
+        if remaining <= 0:
+            del user_data['items']['viagra']
+            
+        self._save_data()
+        return remaining  # 返回剩余次数
 
     async def process_purchase_command(self, event):
         """处理购买命令"""
@@ -452,14 +477,20 @@ class NiuniuShop:
             
         # 解析购买的物品ID
         msg = event.message_str.strip()
-        try:
-            item_id = int(msg[2:].strip())
-            if item_id in self.SHOP_ITEMS:
-                async for result in self.process_purchase(event, item_id):
-                    yield result
-            else:
-                yield event.plain_result(f"❌ 无效的商品编号，有效范围是1-{len(self.SHOP_ITEMS)}")
-        except ValueError:
-            # 如果无法解析为数字，则显示商城
+        # 如果消息长度至少为3且以"购买"开头
+        if len(msg) >= 3 and msg.startswith("购买"):
+            try:
+                item_id = int(msg[2:].strip())
+                if item_id in self.SHOP_ITEMS:
+                    async for result in self.process_purchase(event, item_id):
+                        yield result
+                else:
+                    yield event.plain_result(f"❌ 无效的商品编号，有效范围是1-{len(self.SHOP_ITEMS)}")
+            except ValueError:
+                # 如果无法解析为数字，则显示商城
+                shop_text = self.get_shop_text(user_data.get('coins', 0))
+                yield event.plain_result(shop_text)
+        else:
+            # 如果消息不是以"购买"开头，则显示商城
             shop_text = self.get_shop_text(user_data.get('coins', 0))
             yield event.plain_result(shop_text)
