@@ -54,6 +54,11 @@ class NiuniuPlugin(Star):
         self.shop = NiuniuShop(self)
         # 初始化定时测试模块
         self.timer_test = TimerTest(context)
+        
+        # 启动贞操锁监控任务
+        asyncio.create_task(self.shop.monitor_chastity_locks())
+        # 启动变性手术监控任务
+        asyncio.create_task(self.shop.monitor_gender_surgeries())
 
     # region 数据管理
     def _create_niuniu_lengths_file(self):
@@ -159,6 +164,7 @@ class NiuniuPlugin(Star):
 🔹 牛牛排行 - 查看群排行榜
 🔹 每日签到 - 领取金币奖励
 🔹 牛牛商城 - 购买强力道具
+🔹 牛牛背包 - 查看拥有道具
 🔹 打工 - 赚取金币
 🔹 牛牛开/关 - 管理插件"""
             },
@@ -383,6 +389,12 @@ class NiuniuPlugin(Star):
             async for result in self._handle_exchange(event):
                 yield result
             return
+        
+        # 添加背包命令
+        if msg.startswith("牛牛背包"):
+            async for result in self.shop.show_backpack(event):
+                yield result
+            return
 
         handler_map = {
             "牛牛菜单": self._show_menu,
@@ -398,7 +410,8 @@ class NiuniuPlugin(Star):
             "牛牛商城": self._show_shop,
             "打工时间": self._check_work_time,
             "打工": self._work,
-            "牛牛日历": self._view_sign_calendar
+            "牛牛日历": self._view_sign_calendar,
+            "牛牛背包": lambda event: self.shop.show_backpack(event)  # 添加背包查看命令
         }
 
         for cmd, handler in handler_map.items():
@@ -1051,7 +1064,8 @@ class NiuniuPlugin(Star):
 
         # 检查目标是否有贞操锁
         if self.shop.has_chastity_lock(group_id, target_id):
-            yield event.plain_result(f"❌ {target_data['nickname']}装备了贞操锁，无法被比划")
+            time_left = self.shop.get_chastity_lock_time_left(group_id, target_id)
+            yield event.plain_result(f"❌ {target_data['nickname']}装备了贞操锁，无法被比划\n剩余时间: {time_left}")
             return
 
         # 计算胜负
@@ -1320,7 +1334,8 @@ class NiuniuPlugin(Star):
             
         # 检查目标是否有贞操锁
         if self.shop.has_chastity_lock(group_id, target_id):
-            yield event.plain_result(f"❌ {target_data['nickname']}装备了贞操锁，无法被锁牛牛")
+            time_left = self.shop.get_chastity_lock_time_left(group_id, target_id)
+            yield event.plain_result(f"❌ {target_data['nickname']}装备了贞操锁，无法被锁牛牛\n剩余时间: {time_left}")
             return
 
         # 获取用户的锁定记录
