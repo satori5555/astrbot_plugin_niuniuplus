@@ -166,6 +166,7 @@ class NiuniuPlugin(Star):
 🔹 牛牛商城 - 购买强力道具
 🔹 牛牛背包 - 查看拥有道具
 🔹 打工 - 赚取金币
+🔹 送金币 @对方 - 转赠金币
 🔹 牛牛开/关 - 管理插件"""
             },
             'system': {
@@ -181,6 +182,15 @@ class NiuniuPlugin(Star):
                 'increase': "😂 {target_nickname} 的牛牛被 {nickname} 锁爽了！增加 {change}cm！",
                 'break': "💔 {target_nickname} 的牛牛被 {nickname} 锁断了！长度减少一半！",
                 'no_effect': "😅 {target_nickname} 的牛牛完美躲过了 {nickname} 嘴巴！"
+            },
+            'transfer': {
+                'no_target': "❌ 请指定转赠对象",
+                'target_not_registered': "❌ 对方尚未注册牛牛",
+                'self_transfer': "❌ 不能给自己转赠金币",
+                'invalid_amount': "❌ 请输入有效的金币数量",
+                'insufficient_coins': "❌ 你的金币不足",
+                'not_registered': "❌ 请先注册牛牛",
+                'success': "💰 成功转赠 {amount} 金币给 {target_nickname}\n你的余额: {user_balance}\n对方余额: {target_balance}"
             }
         }
         
@@ -408,10 +418,11 @@ class NiuniuPlugin(Star):
             "锁牛牛": self._lock_niuniu,
             "每日签到": self._daily_sign,      
             "牛牛商城": self._show_shop,
+            "牛牛背包": lambda event: self.shop.show_backpack(event),
+            "送金币": self._transfer_coins,  # 添加金币转赠命令
             "打工时间": self._check_work_time,
             "打工": self._work,
-            "牛牛日历": self._view_sign_calendar,
-            "牛牛背包": lambda event: self.shop.show_backpack(event)  # 添加背包查看命令
+            "牛牛日历": self._view_sign_calendar
         }
 
         for cmd, handler in handler_map.items():
@@ -637,7 +648,7 @@ class NiuniuPlugin(Star):
         # 发送开始打工的消息
         yield event.plain_result(f"🧪 测试模式：{nickname}开始打工测试，将在{minutes}分钟后结束。\n💰 获得{total_coins}金币\n现在金币余额：{user_data['coins']}💰")
 
-        # 创建并存储异步任务，使用与timer_test相似的方式
+        # 创建并存储异步任务，使用与定时测试相似的方式
         task_id = f"work_test_{group_id}_{user_id}_{int(time.time())}"
         task = asyncio.create_task(self._work_timer_improved(
             group_id=group_id,
@@ -807,6 +818,11 @@ class NiuniuPlugin(Star):
             yield event.plain_result(f"❌ {nickname}，你已被绝育，需要花费150金币解锁")
             return
 
+        # 添加变性状态检查
+        if self.shop.is_gender_surgery_active(group_id, user_id):
+            yield event.plain_result(f"❌ {nickname}，变性状态下牛牛无法变长哦~")
+            return
+
         # 获取当前时间
         current_time = time.time()
         
@@ -883,6 +899,111 @@ class NiuniuPlugin(Star):
 
         text = template.format(nickname=nickname, change=abs(change))
         yield event.plain_result(f"{text}\n当前长度：{self.format_length(user_data['length'])}")
+
+    # ...existing code...
+
+    async def _transfer_coins(self, event):
+        """金币转赠功能"""
+        group_id = str(event.message_obj.group_id)
+        user_id = str(event.get_sender_id())
+        nickname = event.get_sender_name()
+
+        group_data = self.get_group_data(group_id)
+        if not group_data.get('plugin_enabled', False):
+            yield event.plain_result("❌ 插件未启用")
+            return
+
+        # 检查用户是否在打工中
+        if self._is_user_working(group_id, user_id):
+            yield event.plain_result(f"小南娘：{nickname}，服务的时候要认真哦！")
+            return
+
+        # 检查自身是否注册
+        user_data = self.get_user_data(group_id, user_id)
+        if not user_data:
+            yield event.plain_result(self.niuniu_texts['transfer']['not_registered'])
+            return
+
+        # 解析目标用户和金币数量
+        msg = event.message_str.strip()
+        if msg.startswith("送金币"):
+            msg = msg[len("送金币"):].strip()
+        
+        # 先尝试获取@的用户
+        target_id = None
+        for comp in event.message_obj.message:
+            if isinstance(comp, At):
+                target_id = str(comp.qq)
+                break
+        
+        # 如果没有@，尝试从消息中解析用户名
+        if not target_id:
+            # 尝试从消息中提取用户名和金额
+            parts = msg.split()
+            if len(parts) < 2:  # 至少需要用户名和金额
+                yield event.plain_result(self.niuniu_texts['transfer']['no_target'])
+                return
+            
+            target_name = parts[0]
+            # 在群内查找匹配的用户
+            for uid, data in group_data.items():
+                if isinstance(data, dict) and 'nickname' in data:
+                    if target_name in data['nickname']:
+                        target_id = uid
+                        break
+        
+        if not target_id:
+            yield event.plain_result(self.niuniu_texts['transfer']['no_target'])
+            return
+
+        if target_id == user_id:
+            yield event.plain_result(self.niuniu_texts['transfer']['self_transfer'])
+            return
+
+        # 获取目标数据
+        target_data = self.get_user_data(group_id, target_id)
+        if not target_data:
+            yield event.plain_result(self.niuniu_texts['transfer']['target_not_registered'])
+            return
+
+        # 解析金币数量 - 查找最后一个数字
+        amounts = []
+        for part in msg.split():
+            try:
+                amount = int(part)
+                amounts.append(amount)
+            except ValueError:
+                continue
+        
+        if not amounts:
+            yield event.plain_result(self.niuniu_texts['transfer']['invalid_amount'])
+            return
+        
+        amount = amounts[-1]  # 使用最后一个数字作为金额
+        if amount <= 0:
+            yield event.plain_result(self.niuniu_texts['transfer']['invalid_amount'])
+            return
+
+        # 检查金币是否足够
+        if user_data.get('coins', 0) < amount:
+            yield event.plain_result(self.niuniu_texts['transfer']['insufficient_coins'])
+            return
+
+        # 执行转赠
+        user_data['coins'] -= amount
+        target_data['coins'] = target_data.get('coins', 0) + amount
+        self._save_niuniu_lengths()
+
+        # 发送成功消息
+        text = self.niuniu_texts['transfer']['success'].format(
+            amount=amount,
+            target_nickname=target_data['nickname'],
+            user_balance=user_data['coins'],
+            target_balance=target_data['coins']
+        )
+        yield event.plain_result(text)
+
+    # ...existing code...
 
     # 在 NiuniuPlugin 类中添加签到方法
     async def _daily_sign(self, event):
@@ -1066,6 +1187,11 @@ class NiuniuPlugin(Star):
         if self.shop.has_chastity_lock(group_id, target_id):
             time_left = self.shop.get_chastity_lock_time_left(group_id, target_id)
             yield event.plain_result(f"❌ {target_data['nickname']}装备了贞操锁，无法被比划\n剩余时间: {time_left}")
+            return
+
+        # 添加变性状态检查
+        if self.shop.is_gender_surgery_active(group_id, user_id):
+            yield event.plain_result(f"❌ {nickname}，变性状态下牛牛无法变长哦~")
             return
 
         # 计算胜负
@@ -1373,7 +1499,7 @@ class NiuniuPlugin(Star):
         rand = random.random()
         old_length = target_data['length']
         
-        if rand < 0.2:  # 20% 减少
+        if (rand < 0.2):  # 20% 减少
             change = random.randint(1, 5)
             target_data['length'] = max(1, target_data['length'] - change)
             text = self.niuniu_texts['lock']['decrease'].format(
@@ -1381,7 +1507,7 @@ class NiuniuPlugin(Star):
                 target_nickname=target_data['nickname'],
                 change=change
             )
-        elif rand < 0.8:  # 60% 增长
+        elif (rand < 0.8):  # 60% 增长
             change = random.randint(1, 5)
             target_data['length'] += change
             text = self.niuniu_texts['lock']['increase'].format(
@@ -1389,7 +1515,7 @@ class NiuniuPlugin(Star):
                 target_nickname=target_data['nickname'],
                 change=change
             )
-        elif rand < 0.9:  # 10% 咬断
+        elif (rand < 0.9):  # 10% 咬断
             change = target_data['length'] // 2
             target_data['length'] = max(1, target_data['length'] - change)
             text = self.niuniu_texts['lock']['break'].format(
@@ -1562,8 +1688,7 @@ class NiuniuPlugin(Star):
         user_data = self.get_user_data(group_id, user_id)
         nickname = event.get_sender_name()
         
-        # 打胶相关代码...
-        
+
         # 检查是否拥有伟哥并使用
         current_time = time.time()
         last_dajiao = self.last_actions.get(group_id, {}).get(user_id, {}).get('dajiao', 0)
@@ -1580,4 +1705,167 @@ class NiuniuPlugin(Star):
             return
             
         # 剩余的打胶逻辑...
+
+    async def _transfer_coins(self, event):
+        """金币转赠功能"""
+        group_id = str(event.message_obj.group_id)
+        user_id = str(event.get_sender_id())
+        nickname = event.get_sender_name()
+
+        group_data = self.get_group_data(group_id)
+        if not group_data.get('plugin_enabled', False):
+            yield event.plain_result("❌ 插件未启用")
+            return
+
+        # 检查用户是否在打工中
+        if self._is_user_working(group_id, user_id):
+            yield event.plain_result(f"小南娘：{nickname}，服务的时候要认真哦！")
+            return
+
+        # 检查自身是否注册
+        user_data = self.get_user_data(group_id, user_id)
+        if not user_data:
+            yield event.plain_result(self.niuniu_texts['transfer']['not_registered'])
+            return
+
+        # 解析目标用户和金币数量
+        msg = event.message_str.strip()
+        if msg.startswith("送金币"):
+            msg = msg[len("送金币"):].strip()
+        
+        # 先尝试获取@的用户
+        target_id = None
+        for comp in event.message_obj.message:
+            if isinstance(comp, At):
+                target_id = str(comp.qq)
+                break
+        
+        # 如果没有@，尝试从消息中解析用户名
+        if not target_id:
+            # 尝试从消息中提取用户名和金额
+            parts = msg.split()
+            if len(parts) < 2:  # 至少需要用户名和金额
+                yield event.plain_result(self.niuniu_texts['transfer']['no_target'])
+                return
+            
+            target_name = parts[0]
+            # 在群内查找匹配的用户
+            for uid, data in group_data.items():
+                if isinstance(data, dict) and 'nickname' in data:
+                    if target_name in data['nickname']:
+                        target_id = uid
+                        break
+        
+        if not target_id:
+            yield event.plain_result(self.niuniu_texts['transfer']['no_target'])
+            return
+
+        if target_id == user_id:
+            yield event.plain_result(self.niuniu_texts['transfer']['self_transfer'])
+            return
+
+        # 获取目标数据
+        target_data = self.get_user_data(group_id, target_id)
+        if not target_data:
+            yield event.plain_result(self.niuniu_texts['transfer']['target_not_registered'])
+            return
+
+        # 解析金币数量 - 查找最后一个数字
+        amounts = []
+        for part in msg.split():
+            try:
+                amount = int(part)
+                amounts.append(amount)
+            except ValueError:
+                continue
+        
+        if not amounts:
+            yield event.plain_result(self.niuniu_texts['transfer']['invalid_amount'])
+            return
+        
+        amount = amounts[-1]  # 使用最后一个数字作为金额
+        if amount <= 0:
+            yield event.plain_result(self.niuniu_texts['transfer']['invalid_amount'])
+            return
+
+        # 检查金币是否足够
+        if user_data.get('coins', 0) < amount:
+            yield event.plain_result(self.niuniu_texts['transfer']['insufficient_coins'])
+            return
+
+        # 执行转赠
+        user_data['coins'] -= amount
+        target_data['coins'] = target_data.get('coins', 0) + amount
+        self._save_niuniu_lengths()
+
+        # 发送成功消息
+        text = self.niuniu_texts['transfer']['success'].format(
+            amount=amount,
+            target_nickname=target_data['nickname'],
+            user_balance=user_data['coins'],
+            target_balance=target_data['coins']
+        )
+        yield event.plain_result(text)
+
+    async def _handle_sterilization(self, event):
+        """处理绝育指令"""
+        group_id = str(event.message_obj.group_id)
+        user_id = str(event.get_sender_id())
+        nickname = event.get_sender_name()
+
+        # 检查插件是否启用
+        group_data = self.get_group_data(group_id)
+        if not group_data.get('plugin_enabled', False):
+            yield event.plain_result("❌ 插件未启用")
+            return
+
+        # 检查用户是否注册
+        user_data = self.get_user_data(group_id, user_id)
+        if not user_data:
+            yield event.plain_result("❌ 请先注册牛牛")
+            return
+
+        # 检查用户是否在打工中
+        if self._is_user_working(group_id, user_id):
+            yield event.plain_result(f"小南娘：{nickname}，服务的时候要认真哦！")
+            return
+
+        # 检查是否有待使用的绝育环
+        if not self.last_actions.get(group_id, {}).get(user_id, {}).get('waiting_for_sterilization'):
+            yield event.plain_result("❌ 请先购买绝育环")
+            return
+
+        # 解析目标用户
+        target_id = None
+        for comp in event.message_obj.message:
+            if isinstance(comp, At):
+                target_id = str(comp.qq)
+                break
+
+        # 如果没有@，尝试从消息中解析用户名
+        if not target_id:
+            msg = event.message_str.strip()
+            if msg.startswith("绝育"):
+                target_name = msg[2:].strip()
+                if target_name:
+                    # 在群数据中查找匹配的用户
+                    for uid, data in group_data.items():
+                        if isinstance(data, dict) and 'nickname' in data:
+                            if target_name in data['nickname']:
+                                target_id = uid
+                                break
+
+        if not target_id:
+            yield event.plain_result("❌ 请指定要绝育的目标用户")
+            return
+
+        if target_id == user_id:
+            yield event.plain_result("❌ 不能对自己使用绝育环")
+            return
+
+        # 使用绝育环
+        async for result in self.shop.use_sterilization(event, target_id):
+            yield result
+
+    # endregion
 
