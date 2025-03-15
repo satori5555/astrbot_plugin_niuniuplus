@@ -19,6 +19,8 @@ from sign_image import SignImageGenerator
 from niuniu_shop import NiuniuShop
 # 添加定时测试模块导入
 from timer_test import TimerTest
+# 添加红包模块导入
+from niuniu_redpacket import NiuniuRedPacket
 
 # 常量定义
 PLUGIN_DIR = os.path.join('data', 'plugins', 'astrbot_plugin_niuniu')
@@ -54,6 +56,8 @@ class NiuniuPlugin(Star):
         self.shop = NiuniuShop(self)
         # 初始化定时测试模块
         self.timer_test = TimerTest(context)
+        # 初始化红包模块
+        self.redpacket = NiuniuRedPacket(self)
         
         # 启动贞操锁监控任务
         asyncio.create_task(self.shop.monitor_chastity_locks())
@@ -403,6 +407,17 @@ class NiuniuPlugin(Star):
         # 添加背包命令
         if msg.startswith("牛牛背包"):
             async for result in self.shop.show_backpack(event):
+                yield result
+            return
+
+        # 添加红包相关命令处理
+        if msg.startswith("发红包"):
+            async for result in self.redpacket.handle_send_red_packet(event):
+                yield result
+            return
+            
+        if msg == "抢红包":
+            async for result in self.redpacket.handle_grab_red_packet(event):
                 yield result
             return
 
@@ -1458,10 +1473,16 @@ class NiuniuPlugin(Star):
             yield event.plain_result(self.niuniu_texts['lock']['target_not_registered'])
             return
             
-        # 检查目标是否有贞操锁
+        # 检查目标是否有贞操锁或变性状态
         if self.shop.has_chastity_lock(group_id, target_id):
             time_left = self.shop.get_chastity_lock_time_left(group_id, target_id)
             yield event.plain_result(f"❌ {target_data['nickname']}装备了贞操锁，无法被锁牛牛\n剩余时间: {time_left}")
+            return
+        
+        # 添加变性状态检查
+        if self.shop.is_gender_surgery_active(group_id, target_id):
+            surgery_time = self.shop.get_gender_surgery_time_left(group_id, target_id)
+            yield event.plain_result(f"❌ {target_data['nickname']}正在变性状态下，变成妹子了不能锁哦~\n剩余时间: {surgery_time}")
             return
 
         # 获取用户的锁定记录

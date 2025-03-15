@@ -632,16 +632,27 @@ class NiuniuShop:
                                 del user_data['items']['chastity_lock']
                                 self._save_data()
                                 
-                                # 获取群和用户信息用于通知
-                                if hasattr(user_data, 'get') and 'nickname' in user_data:
+                                # 获取用户群和会话信息
+                                if 'nickname' in user_data:
                                     nickname = user_data['nickname']
-                                    # 打印到控制台
-                                    print(f"用户 {nickname}({user_id}) 在群 {group_id} 的贞操锁已过期")
-                                
+                                    try:
+                                        # 构建消息链
+                                        message_chain = MessageChain([
+                                            At(qq=user_id),
+                                            Plain(f" 小南娘：你的贞操锁已经失效了哦~")
+                                        ])
+                                        # 获取该群的第一个会话ID
+                                        for event in self.context.unified_msg_list:
+                                            if str(event.message_obj.group_id) == str(group_id):
+                                                unified_msg = event.unified_msg_origin
+                                                await self.context.send_message(unified_msg, message_chain)
+                                                break
+                                    except Exception as e:
+                                        print(f"发送贞操锁失效提醒失败: {str(e)}")
+                
             except Exception as e:
                 print(f"监控贞操锁时出错: {str(e)}")
                 
-            # 每10分钟检查一次
             await asyncio.sleep(600)
     
     # 修复监控变性手术的方法
@@ -660,7 +671,6 @@ class NiuniuShop:
                             
                         surgery_data = user_data['gender_surgery']
                         if not isinstance(surgery_data, dict):
-                            # 修复可能存在的非字典类型
                             del user_data['gender_surgery']
                             self._save_data()
                             continue
@@ -669,17 +679,29 @@ class NiuniuShop:
                         
                         if end_time and now > end_time:
                             # 变性手术过期，恢复长度
-                            original_length = surgery_data.get('original_length', 10)  # 默认10cm，防止数据错误
+                            original_length = surgery_data.get('original_length', 10)
                             user_data['length'] = original_length
                             del user_data['gender_surgery']
                             self._save_data()
                             
-                            print(f"用户 {user_id} 在群 {group_id} 的变性手术效果已过期，已自动恢复长度")
+                            try:
+                                # 构建消息链
+                                message_chain = MessageChain([
+                                    At(qq=user_id),
+                                    Plain(f"\n小南娘：你的牛牛已经恢复了哦，长度为 {self.plugin.format_length(original_length)}")
+                                ])
+                                # 获取该群的第一个会话ID
+                                for event in self.context.unified_msg_list:
+                                    if str(event.message_obj.group_id) == str(group_id):
+                                        unified_msg = event.unified_msg_origin
+                                        await self.context.send_message(unified_msg, message_chain)
+                                        break
+                            except Exception as e:
+                                print(f"发送变性结束提醒失败: {str(e)}")
                             
             except Exception as e:
                 print(f"监控变性手术时出错: {str(e)}")
                 
-            # 每10分钟检查一次
             await asyncio.sleep(600)
     
     # 添加获取春风精灵剩余时间的方法
