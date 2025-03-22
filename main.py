@@ -21,6 +21,8 @@ from niuniu_shop import NiuniuShop
 from timer_test import TimerTest
 # 添加红包模块导入
 from niuniu_redpacket import NiuniuRedPacket
+# 添加集市模块导入
+from niuniu_market import NiuniuMarket
 
 # 常量定义
 PLUGIN_DIR = os.path.join('data', 'plugins', 'astrbot_plugin_niuniu')
@@ -58,6 +60,8 @@ class NiuniuPlugin(Star):
         self.timer_test = TimerTest(context)
         # 初始化红包模块
         self.redpacket = NiuniuRedPacket(self)
+        # 初始化牛牛集市
+        self.market = NiuniuMarket(self)
         
         # 启动贞操锁监控任务
         asyncio.create_task(self.shop.monitor_chastity_locks())
@@ -347,7 +351,8 @@ class NiuniuPlugin(Star):
     # endregion
 
     # region 事件处理
-    niuniu_commands = ["牛牛菜单", "牛牛开", "牛牛关", "注册牛牛", "打胶", "我的牛牛", "比划比划", "牛牛排行", "锁牛牛", "打工", "打工时间", "牛牛日历"]
+    niuniu_commands = ["牛牛菜单", "牛牛开", "牛牛关", "注册牛牛", "打胶", "我的牛牛", "比划比划", "牛牛排行", "锁牛牛", "打工", "打工时间", "牛牛日历", 
+                       "牛牛集市", "查看集市", "上架牛牛", "购买牛牛", "回收牛牛"]
 
     @event_message_type(EventMessageType.GROUP_MESSAGE)
     async def on_group_message(self, event: AstrMessageEvent):
@@ -424,6 +429,12 @@ class NiuniuPlugin(Star):
         # 添加扣豆命令处理
         if msg.startswith("扣"):
             async for result in self._handle_kou_doudou(event):
+                yield result
+            return
+
+        # 添加牛牛集市相关命令处理
+        if msg == "牛牛集市" or msg.startswith("上架牛牛") or msg == "查看集市" or msg.startswith("购买牛牛") or msg == "回收牛牛":
+            async for result in self.market.process_market_command(event):
                 yield result
             return
 
@@ -1458,7 +1469,8 @@ class NiuniuPlugin(Star):
 
     async def _show_menu(self, event):
         """显示菜单"""
-        yield event.plain_result(self.niuniu_texts['menu']['default'])
+        menu_text = self.niuniu_texts['menu']['default'] + "\n🏪 牛牛集市 - 交易各种牛牛"
+        yield event.plain_result(menu_text)
 
     async def _lock_niuniu(self, event):
         """锁牛牛功能"""
