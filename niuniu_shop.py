@@ -12,7 +12,7 @@ class NiuniuShop:
         1: {"name": "伟哥", "price": 80, "description": "无视冷却连续打胶5次，且长度不会变短"},
         2: {"name": "男科手术", "price": 100, "description": "75%概率长度翻倍，25%概率减半并获得50金币补偿"},
         3: {"name": "六味地黄丸", "price": 20, "description": "下次比划必胜"},
-        4: {"name": "绝育环", "price": 150, "description": "使目标用户无法进行打胶，目标可花费150金币解锁"},
+        4: {"name": "绝育环", "price": 150, "description": "使目标用户无法进行打胶，目标可花费150金币使用指令“解锁绝育”解锁"},
         5: {"name": "暂时变性手术", "price": 100, "description": "牛牛变为0cm，24h后恢复，期间打工金币翻倍"},
         6: {"name": "牛子转换器", "price": 500, "description": "可以与目标用户的牛牛长度对调"},
         7: {"name": "春风精灵", "price": 50, "description": "1小时内每次冷却完毕自动打胶并提醒"},
@@ -100,11 +100,35 @@ class NiuniuShop:
     def _handle_viagra(self, user_data):
         """伟哥效果处理"""
         items = user_data.setdefault('items', {})
-        items['viagra'] = 5
-        return "✅ 购买成功！获得5次伟哥效果"
+        # 获取当前伟哥次数，不存在则为0
+        current_viagra = items.get('viagra', 0)
+        # 增加5次伟哥效果而不是覆盖
+        items['viagra'] = current_viagra + 5
+        return f"✅ 购买成功！获得5次伟哥效果，当前共有{items['viagra']}次"
         
     def _handle_surgery(self, user_data):
         """男科手术效果处理"""
+        # 检查用户是否处于变性状态
+        group_id = None
+        user_id = None
+        
+        # 尝试从用户数据反向查找group_id和user_id
+        for gid, group_data in self.plugin.niuniu_lengths.items():
+            if not isinstance(group_data, dict):
+                continue
+            for uid, data in group_data.items():
+                if data is user_data:
+                    group_id = gid
+                    user_id = uid
+                    break
+            if group_id:
+                break
+                
+        # 如果找到了用户ID，检查变性状态
+        if group_id and user_id and self.is_gender_surgery_active(group_id, user_id):
+            return "❌ 变性状态下无法进行男科手术"
+            
+        # 正常的手术逻辑
         if random.random() < 0.75:  # 75%成功率
             user_data['length'] *= 2
             return f"🎉 手术成功！牛牛长度翻倍！\n" \
@@ -135,9 +159,13 @@ class NiuniuShop:
         original_length = user_data['length']
         end_time = datetime.datetime.now() + datetime.timedelta(hours=24)
         
+        # 获取之前保存的洞洞深度（如果存在）
+        previous_hole_depth = user_data.get('saved_hole_depth', 0)
+        
         user_data['gender_surgery'] = {
             'original_length': original_length,
-            'end_time': end_time.timestamp()
+            'end_time': end_time.timestamp(),
+            'hole_depth': previous_hole_depth  # 使用之前保存的洞洞深度
         }
         # 设置长度为0
         user_data['length'] = 0
@@ -154,6 +182,10 @@ class NiuniuShop:
                 user_data = self.plugin.get_user_data(group_id, user_id)
                 if user_data and 'gender_surgery' in user_data:
                     original_length = user_data['gender_surgery']['original_length']
+                    # 在恢复前保存当前洞洞深度
+                    current_hole_depth = user_data['gender_surgery'].get('hole_depth', 0)
+                    user_data['saved_hole_depth'] = current_hole_depth
+                    
                     user_data['length'] = original_length
                     del user_data['gender_surgery']
                     self._save_data()
@@ -162,7 +194,7 @@ class NiuniuShop:
                     try:
                         message_chain = MessageChain([
                             At(qq=user_id),
-                            Plain(f"\n小南娘：你的牛牛已经恢复了哦，长度为 {self.plugin.format_length(original_length)}")
+                            Plain(f"\n小南娘：你的洞洞已经变回牛牛了哦，长度为 {self.plugin.format_length(original_length)}")
                         ])
                         await self.context.send_message(event.unified_msg_origin, message_chain)
                     except Exception as e:
@@ -173,7 +205,10 @@ class NiuniuShop:
         task = asyncio.create_task(restore_gender())
         self.tasks[f"gender_surgery_{group_id}_{user_id}"] = task
         
-        return f"✅ 手术成功！你的牛牛变为0cm，24小时后会恢复为 {self.plugin.format_length(original_length)}\n" \
+        # 添加现有洞洞深度信息到返回消息
+        depth_msg = f"\n🕳️ 继承之前的洞洞深度: {previous_hole_depth}cm" if previous_hole_depth > 0 else ""
+        
+        return f"✅ 手术成功！你的牛牛变成了洞洞(0cm)，24小时后会恢复为 {self.plugin.format_length(original_length)}{depth_msg}\n" \
                f"💰 期间打工金币翻倍！"
                
     def _prepare_exchange(self, user_data, group_id, user_id):
@@ -185,6 +220,10 @@ class NiuniuShop:
         
     def _handle_auto_dajiao(self, user_data, group_id, user_id, event):
         """春风精灵效果处理"""
+        # 检查用户是否处于变性状态
+        if self.is_gender_surgery_active(group_id, user_id):
+            return "❌ 变性状态下无法使用春风精灵"
+        
         # 记录春风精灵购买时间和到期时间
         user_data.setdefault('items', {})['spring_fairy'] = {
             'start_time': time.time(),
@@ -205,6 +244,23 @@ class NiuniuShop:
                     # 检查是否仍有效
                     updated_user_data = self.plugin.get_user_data(group_id, user_id)
                     if not updated_user_data or 'spring_fairy' not in updated_user_data.get('items', {}):
+                        break
+                    
+                    # 检查用户是否变性了，如果变性则停止效果
+                    if self.is_gender_surgery_active(group_id, user_id):
+                        # 移除春风精灵效果
+                        if 'spring_fairy' in updated_user_data.get('items', {}):
+                            del updated_user_data['items']['spring_fairy']
+                            self._save_data()
+                            
+                            try:
+                                message_chain = MessageChain([
+                                    At(qq=user_id),
+                                    Plain(f"\n🧚 由于你变性了，春风精灵效果已自动结束")
+                                ])
+                                await self.context.send_message(event.unified_msg_origin, message_chain)
+                            except Exception as e:
+                                print(f"发送春风精灵效果结束消息失败: {str(e)}")
                         break
                         
                     current_time = time.time()
@@ -337,7 +393,6 @@ class NiuniuShop:
         
         yield event.plain_result("✅ 成功解锁！你可以继续打胶了")
     
-    # 使用牛子转换器
     async def use_exchanger(self, event, target_id):
         """使用牛子转换器"""
         group_id = str(event.message_obj.group_id)
@@ -359,7 +414,16 @@ class NiuniuShop:
         if target_data.get('items', {}).get('chastity_lock'):
             yield event.plain_result(f"❌ {target_data['nickname']}装备了贞操锁，无法交换牛子")
             return
+
+        # 检查双方是否有人处于变性状态
+        if self.is_gender_surgery_active(group_id, target_id):
+            yield event.plain_result(f"❌ {target_data['nickname']}正处于变性状态，无法交换牛子")
+            return
         
+        if self.is_gender_surgery_active(group_id, user_id):
+            yield event.plain_result(f"❌ 你正处于变性状态，无法交换牛子")
+            return
+            
         # 检查自己是否和目标用户相同
         if user_id == target_id:
             yield event.plain_result("❌ 不能与自己交换牛子")
@@ -655,7 +719,7 @@ class NiuniuShop:
                 
             await asyncio.sleep(600)
     
-    # 修复监控变性手术的方法
+    # 修改变性状态监控方法中的消息
     async def monitor_gender_surgeries(self):
         """监控并处理过期的变性手术"""
         while True:
@@ -680,6 +744,11 @@ class NiuniuShop:
                         if end_time and now > end_time:
                             # 变性手术过期，恢复长度
                             original_length = surgery_data.get('original_length', 10)
+                            
+                            # 保存当前的洞洞深度
+                            current_hole_depth = surgery_data.get('hole_depth', 0)
+                            user_data['saved_hole_depth'] = current_hole_depth
+                            
                             user_data['length'] = original_length
                             del user_data['gender_surgery']
                             self._save_data()
@@ -688,7 +757,7 @@ class NiuniuShop:
                                 # 构建消息链
                                 message_chain = MessageChain([
                                     At(qq=user_id),
-                                    Plain(f"\n小南娘：你的牛牛已经恢复了哦，长度为 {self.plugin.format_length(original_length)}")
+                                    Plain(f"\n小南娘：你的洞洞已经变回牛牛了哦，长度为 {self.plugin.format_length(original_length)}")
                                 ])
                                 # 获取该群的第一个会话ID
                                 for event in self.context.unified_msg_list:
@@ -802,3 +871,91 @@ class NiuniuShop:
                 backpack_text += f"🔄 暂时变性: 剩余{time_left}\n"
         
         yield event.plain_result(backpack_text)
+        
+    # 新增方法：获取用户当前的牛牛称呼（变性状态下为"洞洞"）
+    def get_niuniu_name(self, group_id, user_id):
+        """获取用户当前的牛牛称呼，变性状态下为"洞洞"，否则为"牛牛" """
+        if self.is_gender_surgery_active(group_id, user_id):
+            return "洞洞"
+        return "牛牛"
+    
+    # 添加扣豆功能处理方法
+    async def process_kou_doudou(self, event, target_id):
+        """处理扣豆功能"""
+        group_id = str(event.message_obj.group_id)
+        user_id = str(event.get_sender_id())
+        user_data = self.plugin.get_user_data(group_id, user_id)
+        nickname = event.get_sender_name()
+        
+        # 获取目标用户数据
+        target_data = self.plugin.get_user_data(group_id, target_id)
+        if not target_data:
+            yield event.plain_result("❌ 目标用户未注册牛牛")
+            return
+        
+        target_nickname = target_data.get('nickname', '用户')
+        
+        # 检查目标是否处于变性状态
+        if not self.is_gender_surgery_active(group_id, target_id):
+            yield event.plain_result(f"❌ {target_nickname}没有变性，不能扣豆！")
+            return
+        
+        # 检查目标是否有贞操锁
+        if self.has_chastity_lock(group_id, target_id):
+            time_left = self.get_chastity_lock_time_left(group_id, target_id)
+            yield event.plain_result(f"❌ {target_nickname}装备了贞操锁，无法被扣豆\n剩余时间: {time_left}")
+            return
+        
+        # 检查是否为自己
+        if user_id == target_id:
+            yield event.plain_result("❌ 不能自己扣自己")
+            return
+            
+        # 随机减少长度（即洞洞变深）
+        depth_increase = random.randint(1, 5)  # 随机减少1-5cm
+        
+        # 保存用户的变性手术数据
+        surgery_data = target_data.get('gender_surgery', {})
+        if 'hole_depth' not in surgery_data:
+            surgery_data['hole_depth'] = 0
+        
+        # 增加洞洞深度
+        surgery_data['hole_depth'] += depth_increase
+        target_data['gender_surgery'] = surgery_data
+        self._save_data()
+        
+        # 显示结果
+        yield event.plain_result(f"💦 {target_nickname}被{nickname}扣爽了，洞洞深了{depth_increase}cm！\n现在洞洞深度: {surgery_data['hole_depth']}cm")
+    
+    # 修改获取变性手术剩余时间的方法，增加显示洞洞深度
+    def get_gender_surgery_time_left(self, group_id, user_id):
+        """获取变性手术剩余时间文本"""
+        user_data = self.plugin.get_user_data(group_id, user_id)
+        if not user_data or 'gender_surgery' not in user_data:
+            return None
+            
+        end_timestamp = user_data['gender_surgery'].get('end_time')
+        if not end_timestamp:
+            return None
+            
+        now = datetime.datetime.now()
+        end_time = datetime.datetime.fromtimestamp(end_timestamp)
+        
+        if end_time <= now:
+            return None
+            
+        # 计算剩余时间
+        time_left = end_time - now
+        hours = time_left.seconds // 3600
+        minutes = (time_left.seconds % 3600) // 60
+        
+        return f"{hours}小时{minutes}分钟"
+    
+    # 添加方法获取洞洞深度
+    def get_hole_depth(self, group_id, user_id):
+        """获取用户洞洞深度"""
+        user_data = self.plugin.get_user_data(group_id, user_id)
+        if not user_data or 'gender_surgery' not in user_data:
+            return 0
+            
+        return user_data['gender_surgery'].get('hole_depth', 0)

@@ -421,6 +421,12 @@ class NiuniuPlugin(Star):
                 yield result
             return
 
+        # 添加扣豆命令处理
+        if msg.startswith("扣"):
+            async for result in self._handle_kou_doudou(event):
+                yield result
+            return
+
         handler_map = {
             "牛牛菜单": self._show_menu,
             "牛牛开": lambda event: self._toggle_plugin(event, True),
@@ -915,8 +921,6 @@ class NiuniuPlugin(Star):
         text = template.format(nickname=nickname, change=abs(change))
         yield event.plain_result(f"{text}\n当前长度：{self.format_length(user_data['length'])}")
 
-    # ...existing code...
-
     async def _transfer_coins(self, event):
         """金币转赠功能"""
         group_id = str(event.message_obj.group_id)
@@ -1018,9 +1022,6 @@ class NiuniuPlugin(Star):
         )
         yield event.plain_result(text)
 
-    # ...existing code...
-
-    # 在 NiuniuPlugin 类中添加签到方法
     async def _daily_sign(self, event):
         """每日签到"""
         group_id = str(event.message_obj.group_id)
@@ -1095,7 +1096,6 @@ class NiuniuPlugin(Star):
                 f"💰 当前金币：{user_data['coins']}"
             )
 
-    # 在 NiuniuPlugin 类中添加商城相关方法
     async def _show_shop(self, event):
         """显示商城"""
         group_id = str(event.message_obj.group_id)
@@ -1284,7 +1284,8 @@ class NiuniuPlugin(Star):
                 gain=gain
             )
             total_gain = gain
-            if abs(u_len - t_len) >= 20 and user_data['hardness'] < target_data['hardness']:
+            if (u_len - t_len) <= -20 and user_data['hardness'] < target_data['hardness']:
+                # 修正判断：用户长度比对方小20cm以上为极大劣势
                 extra_gain = random.randint(0, 5)  # 额外的奖励值
                 user_data['length'] += extra_gain
                 total_gain += extra_gain
@@ -1309,7 +1310,8 @@ class NiuniuPlugin(Star):
                 target_nickname=target_data['nickname'],
                 loss=loss
             )
-            if abs(u_len - t_len) >= 20 and user_data['hardness'] > target_data['hardness']:
+            if (u_len - t_len) >= 20 and user_data['hardness'] > target_data['hardness']:
+                # 修正判断：用户长度比对方大20cm以上为极大优势
                 extra_loss = random.randint(2, 6)  # 具体的惩罚值
                 user_data['length'] = max(1, user_data['length'] - extra_loss)
                 text += f"\n💔 由于极大优势失败，额外减少 {extra_loss}cm！"
@@ -1371,11 +1373,19 @@ class NiuniuPlugin(Star):
             yield event.plain_result(self.niuniu_texts['my_niuniu']['not_registered'].format(nickname=nickname))
             return
 
+        # 检查是否处于变性状态
+        is_gender_surgery_active = self.shop.is_gender_surgery_active(group_id, user_id)
+        niuniu_name = "洞洞" if is_gender_surgery_active else "牛牛"
+
         # 评价系统
         length = user_data['length']
         hardness = user_data.get('hardness', 1)  # 获取硬度，默认为1
         length_str = self.format_length(length)
-        if length < 12:
+        
+        # 为变性状态添加特殊评价
+        if is_gender_surgery_active:
+            evaluation = "性转成功，变身可爱小萝莉~"
+        elif length < 12:
             evaluation = random.choice(self.niuniu_texts['my_niuniu']['evaluation']['short'])
         elif length < 25:
             evaluation = random.choice(self.niuniu_texts['my_niuniu']['evaluation']['medium'])
@@ -1388,12 +1398,27 @@ class NiuniuPlugin(Star):
         else:
             evaluation = random.choice(self.niuniu_texts['my_niuniu']['evaluation']['ultra_long'])
 
-        text = self.niuniu_texts['my_niuniu']['info'].format(
-            nickname=nickname,
-            length=length_str,
-            hardness=hardness,  # 确保传递硬度参数
-            evaluation=evaluation
-        )
+        # 修改显示文本，使用正确的称呼
+        text = f"📊 {nickname} 的{niuniu_name}状态\n📏 长度：{length_str}\n"
+        
+        # 只有非变性状态才显示硬度
+        if not is_gender_surgery_active:
+            text += f"💪 硬度：{hardness}\n"
+        else:
+            # 如果是变性状态，显示洞洞深度和原牛牛长度
+            hole_depth = self.shop.get_hole_depth(group_id, user_id)
+            original_length = user_data['gender_surgery'].get('original_length', 0)
+            text += f"🕳️ 洞洞深度：{hole_depth}cm\n"
+            text += f"📏 原牛牛长度：{self.format_length(original_length)}\n"
+        
+        text += f"📝 评价：{evaluation}"
+        
+        # 如果在变性状态，添加剩余时间
+        if is_gender_surgery_active:
+            time_left = self.shop.get_gender_surgery_time_left(group_id, user_id)
+            if time_left:
+                text += f"\n⏳ 变性剩余时间：{time_left}"
+        
         yield event.plain_result(text)
 
     async def _show_ranking(self, event):
@@ -1470,7 +1495,7 @@ class NiuniuPlugin(Star):
         # 获取目标数据
         target_data = self.get_user_data(group_id, target_id)
         if not target_data:
-            yield event.plain_result(self.niuniu_texts['lock']['target_not_registered'])
+            yield event.plain_result(self.niuniu_texts['lock']['target_not_registered'].format(nickname=nickname))
             return
             
         # 检查目标是否有贞操锁或变性状态
@@ -1888,5 +1913,54 @@ class NiuniuPlugin(Star):
         async for result in self.shop.use_sterilization(event, target_id):
             yield result
 
-    # endregion
+    async def _handle_kou_doudou(self, event):
+        """处理扣豆指令"""
+        group_id = str(event.message_obj.group_id)
+        user_id = str(event.get_sender_id())
+        nickname = event.get_sender_name()
+
+        # 检查插件是否启用
+        group_data = self.get_group_data(group_id)
+        if not group_data.get('plugin_enabled', False):
+            yield event.plain_result("❌ 插件未启用")
+            return
+
+        # 检查用户是否注册
+        user_data = self.get_user_data(group_id, user_id)
+        if not user_data:
+            yield event.plain_result("❌ 请先注册牛牛")
+            return
+
+        # 检查用户是否在打工中
+        if self._is_user_working(group_id, user_id):
+            yield event.plain_result(f"小南娘：{nickname}，服务的时候要认真哦！")
+            return
+
+        # 解析目标用户
+        target_id = None
+        for comp in event.message_obj.message:
+            if isinstance(comp, At):
+                target_id = str(comp.qq)
+                break
+
+        # 如果没有@，尝试从消息中解析用户名
+        if not target_id:
+            msg = event.message_str.strip()
+            if msg.startswith("扣"):
+                target_name = msg[len("扣"):].strip()
+                if target_name:
+                    # 在群数据中查找匹配的用户
+                    for uid, data in group_data.items():
+                        if isinstance(data, dict) and 'nickname' in data:
+                            if target_name in data['nickname']:
+                                target_id = uid
+                                break
+
+        if not target_id:
+            yield event.plain_result("❌ 请指定要扣豆的目标用户")
+            return
+
+        # 调用shop模块的扣豆方法
+        async for result in self.shop.process_kou_doudou(event, target_id):
+            yield result
 
