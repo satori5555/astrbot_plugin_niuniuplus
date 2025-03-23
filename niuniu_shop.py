@@ -11,7 +11,7 @@ class NiuniuShop:
     SHOP_ITEMS = {
         1: {"name": "伟哥", "price": 80, "description": "无视冷却连续打胶5次，且长度不会变短"},
         2: {"name": "男科手术", "price": 100, "description": "75%概率长度翻倍，25%概率减半并获得50金币补偿"},
-        3: {"name": "六味地黄丸", "price": 20, "description": "下次比划必胜"},
+        3: {"name": "六味地黄丸", "price": 100, "description": "下次比划必胜"},
         4: {"name": "绝育环", "price": 150, "description": "使目标用户无法进行打胶，目标可花费150金币使用指令“解锁绝育”解锁"},
         5: {"name": "暂时变性手术", "price": 100, "description": "牛牛变为0cm，24h后恢复，期间打工金币翻倍"},
         6: {"name": "牛子转换器", "price": 500, "description": "可以与目标用户的牛牛长度对调"},

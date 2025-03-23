@@ -30,6 +30,7 @@ os.makedirs(PLUGIN_DIR, exist_ok=True)
 NIUNIU_LENGTHS_FILE = os.path.join('data', 'niuniu_lengths.yml')
 NIUNIU_TEXTS_FILE = os.path.join(PLUGIN_DIR, 'niuniu_game_texts.yml')
 LAST_ACTION_FILE = os.path.join(PLUGIN_DIR, 'last_actions.yml')
+UPDATES_FILE = os.path.join(current_dir, 'updates.txt')  # 添加更新记录文件路径
 LOCK_COOLDOWN = 300  # 锁牛牛冷却时间 5分钟
 
 @register("niuniu_plugin", "长安某", "牛牛插件，包含注册牛牛、打胶、我的牛牛、比划比划、牛牛排行等功能", "3.4.2")
@@ -67,6 +68,14 @@ class NiuniuPlugin(Star):
         asyncio.create_task(self.shop.monitor_chastity_locks())
         # 启动变性手术监控任务
         asyncio.create_task(self.shop.monitor_gender_surgeries())
+        self.bull_kings = {}  # 记录每个群的牛王 {str(group_id): str(user_id)}
+    
+        # 启动0点重置连胜的任务
+        asyncio.create_task(self.reset_win_streak_at_midnight())
+        
+        # 确保更新记录文件存在
+        if not os.path.exists(UPDATES_FILE):
+            self._create_default_updates_file()
 
     # region 数据管理
     def _create_niuniu_lengths_file(self):
@@ -359,6 +368,12 @@ class NiuniuPlugin(Star):
         """群聊消息处理器"""
         group_id = str(event.message_obj.group_id)
         msg = event.message_str.strip()
+
+        # 添加查看更新命令处理
+        if msg == "查看更新" or msg == "牛牛更新":
+            async for result in self._show_updates(event):
+                yield result
+            return
 
         # 添加独立测试命令，不需要牛牛插件启用
         if msg == "定时测试":
@@ -770,6 +785,57 @@ class NiuniuPlugin(Star):
     # endregion
 
     # region 核心功能
+    async def reset_win_streak_at_midnight(self):
+        """每天0点重置连胜数据并更新牛王"""
+        while True:
+            # 计算到下一个0点的时间
+            now = datetime.datetime.now()
+            next_day = now.replace(hour=0, minute=0, second=0, microsecond=0) + datetime.timedelta(days=1)
+            wait_seconds = (next_day - now).total_seconds()
+            
+            # 等待到0点
+            await asyncio.sleep(wait_seconds)
+            
+            try:
+                # 重置所有群的连胜数据
+                for group_id, group_data in self.niuniu_lengths.items():
+                    if not isinstance(group_data, dict):
+                        continue
+                        
+                    # 查找当前群的牛王
+                    top_streak = 0
+                    king_id = None
+                    
+                    for user_id, user_data in group_data.items():
+                        if not isinstance(user_data, dict):
+                            continue
+                            
+                        # 更新历史最高连胜
+                        today_max = user_data.get('today_max_win_streak', 0)
+                        max_streak = user_data.get('max_win_streak', 0)
+                        user_data['max_win_streak'] = max(max_streak, today_max)
+                        
+                        # 记录当前群的最高连胜用户
+                        if today_max > top_streak:
+                            top_streak = today_max
+                            king_id = user_id
+                        
+                        # 重置当前连胜和今日最高连胜
+                        user_data['win_streak'] = 0
+                        user_data['today_max_win_streak'] = 0
+                        user_data['streak_rewards'] = []
+                    
+                    # 更新牛王
+                    if king_id:
+                        self.bull_kings[group_id] = king_id
+                        
+                # 保存数据
+                self._save_niuniu_lengths()
+                self.context.logger.info("已重置所有用户的连胜数据并更新牛王")
+                
+            except Exception as e:
+                self.context.logger.error(f"重置连胜数据失败: {e}")
+
     async def _toggle_plugin(self, event, enable):
         """开关插件"""
         group_id = str(event.message_obj.group_id)
@@ -1311,6 +1377,22 @@ class NiuniuPlugin(Star):
                 text += f"\n🎉 {nickname} 因硬度优势获胜！"
             if total_gain == 0:
                 text += f"\n{self.niuniu_texts['compare']['user_no_increase'].format(nickname=nickname)}"
+            # 增加连胜计数
+            user_data['win_streak'] = user_data.get('win_streak', 0) + 1
+            user_data['today_max_win_streak'] = max(user_data.get('today_max_win_streak', 0), user_data['win_streak'])
+            user_data['max_win_streak'] = max(user_data.get('max_win_streak', 0), user_data['win_streak'])
+            
+            # 随机奖励金币
+            coins_reward = random.randint(10, 20)
+            user_data['coins'] = user_data.get('coins', 0) + coins_reward
+            
+            # 检查连胜奖励
+            _, reward_message = self.check_win_streak_rewards(group_id, user_id, user_data)
+            
+            # 更新消息
+            text += f"\n💰 胜利奖励: +{coins_reward}金币"
+            if reward_message:
+                text += reward_message
         else:
             gain = random.randint(0, 3)
             loss = random.randint(1, 2)
@@ -1328,6 +1410,8 @@ class NiuniuPlugin(Star):
                 text += f"\n💔 由于极大优势失败，额外减少 {extra_loss}cm！"
             if abs(u_len - t_len) <= 5 and user_data['hardness'] < target_data['hardness']:
                 text += f"\n💔 {nickname} 因硬度劣势败北！"
+            # 重置连胜
+            user_data['win_streak'] = 0
 
         # 硬度衰减
         if random.random() < 0.3:
@@ -1338,11 +1422,16 @@ class NiuniuPlugin(Star):
         self._save_niuniu_lengths()
 
         # 生成结果消息
+        current_streak = user_data.get('win_streak', 0)
+        max_streak = user_data.get('max_win_streak', 0)
+        is_king = self.bull_kings.get(group_id) == user_id
+    
         result_msg = [
             "⚔️ 【牛牛对决结果】 ⚔️",
-            f"🗡️ {nickname}: {self.format_length(old_u_len)} > {self.format_length(user_data['length'])}",
-            f"🛡️ {target_data['nickname']}: {self.format_length(old_t_len)} > {self.format_length(target_data['length'])}",
-            f"📢 {text}"
+            f"🗡️ {nickname}{' 👑牛王' if is_king else ''}: {self.format_length(old_u_len)} > {self.format_length(user_data['length'])}",
+            f"🛡️ {target_data['nickname']}{' 👑牛王' if self.bull_kings.get(group_id) == target_id else ''}: {self.format_length(old_t_len)} > {self.format_length(target_data['length'])}",
+            f"📢 {text}",
+            f"🔄 连胜: {current_streak}次 | 最高: {max_streak}次"
         ]
 
         # 添加特殊事件
@@ -1469,7 +1558,7 @@ class NiuniuPlugin(Star):
 
     async def _show_menu(self, event):
         """显示菜单"""
-        menu_text = self.niuniu_texts['menu']['default'] + "\n🏪 牛牛集市 - 交易各种牛牛"
+        menu_text = self.niuniu_texts['menu']['default'] + "\n🏪 牛牛集市 - 交易各种牛牛\n📃 查看更新 - 查看插件更新内容"
         yield event.plain_result(menu_text)
 
     async def _lock_niuniu(self, event):
@@ -1906,7 +1995,7 @@ class NiuniuPlugin(Star):
             if msg.startswith("绝育"):
                 target_name = msg[2:].strip()
                 if target_name:
-                    # 在群数据中查找匹配的用户
+                    # 在群数据中查找匹配用户名的用户
                     for uid, data in group_data.items():
                         if isinstance(data, dict) and 'nickname' in data:
                             if target_name in data['nickname']:
@@ -1975,4 +2064,89 @@ class NiuniuPlugin(Star):
         # 调用shop模块的扣豆方法
         async for result in self.shop.process_kou_doudou(event, target_id):
             yield result
+
+    def check_win_streak_rewards(self, group_id, user_id, user_data):
+        """检查并发放连胜奖励"""
+        group_id, user_id = str(group_id), str(user_id)
+        win_streak = user_data.get('win_streak', 0)
+        streak_rewards = user_data.get('streak_rewards', [])
+        
+        # 奖励配置
+        rewards = {
+            3: 100,
+            6: 150,
+            9: 200
+        }
+        
+        # 检查是否达到奖励条件且未领取
+        reward_coins = 0
+        reward_message = ""
+        
+        for streak, coins in rewards.items():
+            if win_streak >= streak and streak not in streak_rewards:
+                # 发放奖励
+                user_data['coins'] = user_data.get('coins', 0) + coins
+                streak_rewards.append(streak)
+                reward_coins += coins
+                reward_message = f"\n🎖️ 连胜{streak}次！奖励{coins}金币！"
+        
+        # 更新奖励记录
+        user_data['streak_rewards'] = streak_rewards
+        
+        return reward_coins, reward_message
+
+    # 添加创建默认更新记录文件的方法
+    def _create_default_updates_file(self):
+        """创建默认的更新记录文件"""
+        try:
+            with open(UPDATES_FILE, 'w', encoding='utf-8') as f:
+                f.write("=== 牛牛插件更新记录 ===\n\n")
+                f.write("版本 3.4.2 (2023-11-05)\n")
+                f.write("- 初始化更新记录文件\n")
+                f.write("- 添加查看更新功能\n")
+        except Exception as e:
+            self.context.logger.error(f"创建更新记录文件失败: {str(e)}")
+
+    # 添加查看更新记录的方法
+    def _read_updates(self):
+        """读取更新记录"""
+        try:
+            if os.path.exists(UPDATES_FILE):
+                with open(UPDATES_FILE, 'r', encoding='utf-8') as f:
+                    return f.read()
+            else:
+                return "未找到更新记录"
+        except Exception as e:
+            self.context.logger.error(f"读取更新记录失败: {str(e)}")
+            return f"读取更新记录失败: {str(e)}"
+
+    # 添加显示更新记录的命令处理
+    async def _show_updates(self, event):
+        """显示更新记录"""
+        group_id = str(event.message_obj.group_id)
+        
+        # 不需要检查插件是否启用，因为这是元信息
+        updates = self._read_updates()
+        
+        # 检查内容是否过长，如果太长则只显示最新部分
+        if len(updates) > 1000:
+            lines = updates.split("\n")
+            header = lines[0]  # 保留标题行
+            # 找到前3个版本的更新
+            version_count = 0
+            start_line = 0
+            for i, line in enumerate(lines):
+                if line.startswith("版本"):
+                    version_count += 1
+                    if version_count == 1:  # 记录第一个版本的位置
+                        start_line = i
+                if version_count > 3:  # 只显示最新的3个版本
+                    break
+            
+            # 组合内容
+            result = header + "\n\n" + "\n".join(lines[start_line:i]) + "\n\n...更多历史更新内容已省略"
+        else:
+            result = updates
+            
+        yield event.plain_result(result)
 
