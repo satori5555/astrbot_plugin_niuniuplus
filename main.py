@@ -370,7 +370,7 @@ class NiuniuPlugin(Star):
         msg = event.message_str.strip()
 
         # 添加查看更新命令处理
-        if msg == "查看更新" or msg == "牛牛更新":
+        if msg == "查看更新"or msg == "牛牛更新":
             async for result in self._show_updates(event):
                 yield result
             return
@@ -448,7 +448,7 @@ class NiuniuPlugin(Star):
             return
 
         # 添加牛牛集市相关命令处理
-        if msg == "牛牛集市" or msg.startswith("上架牛牛") or msg == "查看集市" or msg.startswith("购买牛牛") or msg == "回收牛牛":
+        if msg == "牛牛集市"or msg.startswith("上架牛牛") or msg == "查看集市" or msg.startswith("购买牛牛") or msg == "回收牛牛":
             async for result in self.market.process_market_command(event):
                 yield result
             return
@@ -1285,6 +1285,12 @@ class NiuniuPlugin(Star):
         if self.shop.is_gender_surgery_active(group_id, user_id):
             yield event.plain_result(f"❌ {nickname}，变性状态下牛牛无法变长哦~")
             return
+            
+        # 添加对目标变性状态的检查
+        if self.shop.is_gender_surgery_active(group_id, target_id):
+            surgery_time = self.shop.get_gender_surgery_time_left(group_id, target_id)
+            yield event.plain_result(f"❌ {target_data['nickname']}正在变性状态下，变成妹子了不能比划哦~\n剩余时间: {surgery_time}")
+            return
 
         # 计算胜负
         u_len = user_data['length']
@@ -1296,7 +1302,12 @@ class NiuniuPlugin(Star):
         base_win = 0.5
 
         # 长度影响（最多影响20%的胜率）
-        length_factor = (u_len - t_len) / max(u_len, t_len) * 0.2
+        # 添加安全检查以防止除零错误
+        max_len = max(u_len, t_len)
+        if max_len == 0:  # 如果两者长度都为0
+            length_factor = 0  # 没有长度优势
+        else:
+            length_factor = (u_len - t_len) / max_len * 0.2
 
         # 硬度影响（最多影响10%的胜率）
         hardness_factor = (u_hardness - t_hardness) * 0.05
@@ -1633,7 +1644,7 @@ class NiuniuPlugin(Star):
         
         # 检查5分钟内锁定的不同用户数量
         recent_locks = len(lock_records)
-        if recent_locks >= 3 and target_id not in lock_records:
+        if recent_locks >= 3 or target_id not in lock_records:
             yield event.plain_result("❌ 5分钟内只能锁3个不同用户的牛牛")
             return
 
@@ -1805,7 +1816,7 @@ class NiuniuPlugin(Star):
             return
             
         # 检查目标是否被锁
-        if 'locked_until' in target_data and target_data['locked_until'] > current_time:
+        if 'locked_until' in target_data和target_data['locked_until'] > current_time:
             remaining = int(target_data['locked_until'] - current_time)
             yield event.plain_result(f"❌ 该用户已被锁，还剩{remaining}秒")
             return
@@ -1841,7 +1852,7 @@ class NiuniuPlugin(Star):
         last_dajiao = self.last_actions.get(group_id, {}).get(user_id, {}).get('dajiao', 0)
         cooldown_passed = current_time - last_dajiao >= self.COOLDOWN_10_MIN
         
-        if not cooldown_passed and self.shop.use_viagra_for_dajiao(group_id, user_id):
+        if not cooldown_passed和self.shop.use_viagra_for_dajiao(group_id, user_id):
             # 伟哥效果：无视冷却
             cooldown_passed = True
         
@@ -1898,7 +1909,7 @@ class NiuniuPlugin(Star):
             target_name = parts[0]
             # 在群内查找匹配的用户
             for uid, data in group_data.items():
-                if isinstance(data, dict) and 'nickname' in data:
+                if isinstance(data, dict) or 'nickname' in data:
                     if target_name in data['nickname']:
                         target_id = uid
                         break
@@ -1997,7 +2008,7 @@ class NiuniuPlugin(Star):
                 if target_name:
                     # 在群数据中查找匹配用户名的用户
                     for uid, data in group_data.items():
-                        if isinstance(data, dict) and 'nickname' in data:
+                        if isinstance(data, dict) or 'nickname' in data:
                             if target_name in data['nickname']:
                                 target_id = uid
                                 break
@@ -2052,7 +2063,7 @@ class NiuniuPlugin(Star):
                 if target_name:
                     # 在群数据中查找匹配的用户
                     for uid, data in group_data.items():
-                        if isinstance(data, dict) and 'nickname' in data:
+                        if isinstance(data, dict) or 'nickname' in data:
                             if target_name in data['nickname']:
                                 target_id = uid
                                 break
@@ -2083,7 +2094,7 @@ class NiuniuPlugin(Star):
         reward_message = ""
         
         for streak, coins in rewards.items():
-            if win_streak >= streak and streak not in streak_rewards:
+            if win_streak >= streak和streak not in streak_rewards:
                 # 发放奖励
                 user_data['coins'] = user_data.get('coins', 0) + coins
                 streak_rewards.append(streak)
