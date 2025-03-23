@@ -3,6 +3,8 @@ import yaml
 import time
 import math
 from typing import Dict, List, Tuple, Any, Optional
+from astrbot.api.message_components import Plain
+from astrbot.core.utils.session_waiter import session_waiter, SessionController
 
 class NiuniuMarket:
     """牛牛集市类，管理牛牛的上架、购买、回收等功能"""
@@ -318,7 +320,7 @@ class NiuniuMarket:
             yield event.plain_result(result)
             
         elif msg == "回收牛牛":
-            # 先获取用户数据，显示预览信息
+            # 获取用户数据，显示预览信息
             user_data = self.plugin.get_user_data(group_id, user_id)
             if not user_data:
                 yield event.plain_result("❌ 你还没有注册牛牛")
@@ -332,24 +334,35 @@ class NiuniuMarket:
             # 计算可获得的金币
             coins = self.calculate_recycle_coins(length)
             
-            # 先显示预览信息
+            # 显示预览信息
             preview_msg = (
                 f"📊 回收预览:\n"
                 f"牛牛长度: {self.plugin.format_length(length)}\n"
                 f"预计可得: {coins}金币\n\n"
-                f"确认回收请回复「确认回收」"
+                f"确认回收请回复「确认回收」，取消请等待30秒"
             )
             yield event.plain_result(preview_msg)
             
-            # 等待用户确认
             try:
-                confirm_event = await self.plugin.wait_for_message(
-                    event,
-                    lambda e: e.message_str.strip() == "确认回收",
-                    timeout=30
-                )
-                # 用户确认，执行回收
-                success, result = self.recycle_niuniu(group_id, user_id)
-                yield event.plain_result(result)
+                @session_waiter(timeout=30, record_history_chains=False)
+                async def recycle_waiter(controller: SessionController, confirm_event):
+                    if confirm_event.message_str.strip() == "确认回收":
+                        success, result = self.recycle_niuniu(group_id, user_id)
+                        message_result = confirm_event.make_result()
+                        message_result.chain = [Plain(result)]
+                        await confirm_event.send(message_result)
+                        controller.stop()
+                    else:
+                        message_result = confirm_event.make_result()
+                        message_result.chain = [Plain("❌ 无效的回复，回收已取消")]
+                        await confirm_event.send(message_result)
+                        controller.stop()
+                
+                await recycle_waiter(event)
             except TimeoutError:
-                yield event.plain_result("❌ 回收操作已取消")
+                yield event.plain_result("❌ 回收操作已超时取消")
+            except Exception as e:
+                self.plugin.context.logger.error(f"回收牛牛出错: {str(e)}")
+                yield event.plain_result(f"❌ 回收失败: {str(e)}")
+            finally:
+                event.stop_event()

@@ -348,11 +348,18 @@ class NiuniuPlugin(Star):
         start_time = time.time()
         while time.time() - start_time < timeout:
             try:
-                new_event = await self.context.wait_next_event(1)
-                if (isinstance(new_event, AstrMessageEvent) and 
-                    new_event.message_obj.group_id == event.message_obj.group_id and
-                    new_event.get_sender_id() == event.get_sender_id() and
-                    check(new_event)):
+                # 使用不同方法等待新消息
+                if hasattr(self.context, 'wait_next_event'):
+                    new_event = await self.context.wait_next_event(1)
+                elif hasattr(self.context, 'wait_for_message'):
+                    new_event = await self.context.wait_for_message(timeout=1)
+                else:
+                    new_event = None
+                    await asyncio.sleep(1)
+                if new_event and isinstance(new_event, AstrMessageEvent) and \
+                   new_event.message_obj.group_id == event.message_obj.group_id and \
+                   new_event.get_sender_id() == event.get_sender_id() and \
+                   check(new_event):
                     return new_event
             except TimeoutError:
                 continue
@@ -1816,7 +1823,7 @@ class NiuniuPlugin(Star):
             return
             
         # 检查目标是否被锁
-        if 'locked_until' in target_data和target_data['locked_until'] > current_time:
+        if 'locked_until' in target_data and target_data['locked_until'] > current_time:
             remaining = int(target_data['locked_until'] - current_time)
             yield event.plain_result(f"❌ 该用户已被锁，还剩{remaining}秒")
             return
@@ -1852,7 +1859,7 @@ class NiuniuPlugin(Star):
         last_dajiao = self.last_actions.get(group_id, {}).get(user_id, {}).get('dajiao', 0)
         cooldown_passed = current_time - last_dajiao >= self.COOLDOWN_10_MIN
         
-        if not cooldown_passed和self.shop.use_viagra_for_dajiao(group_id, user_id):
+        if not cooldown_passed and self.shop.use_viagra_for_dajiao(group_id, user_id):
             # 伟哥效果：无视冷却
             cooldown_passed = True
         
@@ -2094,7 +2101,7 @@ class NiuniuPlugin(Star):
         reward_message = ""
         
         for streak, coins in rewards.items():
-            if win_streak >= streak和streak not in streak_rewards:
+            if win_streak >= streak and streak not in streak_rewards:
                 # 发放奖励
                 user_data['coins'] = user_data.get('coins', 0) + coins
                 streak_rewards.append(streak)
