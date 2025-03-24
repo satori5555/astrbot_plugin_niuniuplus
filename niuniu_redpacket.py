@@ -132,7 +132,7 @@ class NiuniuRedPacket:
         
         # 检查用户是否在打工中
         if self.plugin._is_user_working(group_id, user_id):
-            yield event.plain_result(f"小南娘：{nickname}，服务的时候不能抢红包哦！")
+            yield event.plain_result(f"小南娘：{nickname}，服务的时候要认真哦！")
             return
         
         # 检查当前群是否有红包
@@ -142,7 +142,7 @@ class NiuniuRedPacket:
         
         # 获取最新的红包
         packet_id, packet_data = self._get_latest_red_packet(group_id)
-        if not packet_id:
+        if not packet_data:
             yield event.plain_result("❌ 当前没有可抢的红包")
             return
         
@@ -159,19 +159,22 @@ class NiuniuRedPacket:
         # 计算获得的金币数量
         amount_received = self._calculate_red_packet_amount(packet_data)
         
+        # 计算税后金额
+        after_tax, tax = self.plugin.tax_system.process_coins(group_id, amount_received)
+        
         # 更新红包数据
         packet_data['remaining'] -= 1
         packet_data['remaining_amount'] -= amount_received
         packet_data['participants'].append(user_id)
         
         # 更新用户金币
-        user_data['coins'] = user_data.get('coins', 0) + amount_received
+        user_data['coins'] = user_data.get('coins', 0) + after_tax
         self._save_data()
         
         # 发送抢红包成功通知
         chain = [
             At(qq=event.get_sender_id()),
-            Plain(f"\n🧧 抢到了 {amount_received} 金币！\n当前红包剩余 {packet_data['remaining']} 个")
+            Plain(f"\n🧧 抢到了 {after_tax} 金币（缴纳税款：{tax}金币）！\n当前红包剩余 {packet_data['remaining']} 个")
         ]
         yield event.chain_result(chain)
         

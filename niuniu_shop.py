@@ -10,13 +10,14 @@ class NiuniuShop:
     # 商品定义
     SHOP_ITEMS = {
         1: {"name": "伟哥", "price": 80, "description": "无视冷却连续打胶5次，且长度不会变短"},
-        2: {"name": "男科手术", "price": 100, "description": "75%概率长度翻倍，25%概率减半并获得50金币补偿"},
+        2: {"name": "男科手术", "price": 150, "description": "50%概率长度翻倍，50%概率清0并获得100金币补偿"},
         3: {"name": "六味地黄丸", "price": 100, "description": "下次比划必胜"},
-        4: {"name": "绝育环", "price": 150, "description": "使目标用户无法进行打胶，目标可花费150金币使用指令“解锁绝育”解锁"},
+        4: {"name": "绝育环", "price": 150, "description": "使目标用户无法进行打胶，目标可花费150金币使用指令解锁绝育解锁"},
         5: {"name": "暂时变性手术", "price": 100, "description": "牛牛变为0cm，24h后恢复，期间打工金币翻倍"},
         6: {"name": "牛子转换器", "price": 500, "description": "可以与目标用户的牛牛长度对调"},
         7: {"name": "春风精灵", "price": 50, "description": "1小时内每次冷却完毕自动打胶并提醒"},
-        8: {"name": "贞操锁", "price": 150, "description": "阻止其他用户对你使用道具、比划和锁牛牛，持续1天"}
+        8: {"name": "神秘礼盒", "price": 150, "description": "随机获得一件商品或金币奖励"},
+        9: {"name": "牛牛寄生虫", "price": 200, "description": "24小时内目标用户牛牛增长的50%会被你窃取"}
     }
     
     def __init__(self, niuniu_plugin):
@@ -27,6 +28,8 @@ class NiuniuShop:
         self.last_actions = niuniu_plugin.last_actions
         # 存储各种定时任务的引用
         self.tasks = {}
+        # 移除贞操锁监控任务的启动
+        asyncio.create_task(self.monitor_gender_surgeries())
     
     def _save_data(self):
         """保存数据"""
@@ -85,7 +88,8 @@ class NiuniuShop:
             5: lambda u_data: self._handle_gender_surgery(u_data, group_id, user_id, event),
             6: lambda u_data: self._prepare_exchange(u_data, group_id, user_id),
             7: lambda u_data: self._handle_auto_dajiao(u_data, group_id, user_id, event),
-            8: lambda u_data: self._handle_chastity_lock(u_data)
+            8: lambda u_data: self._handle_mystery_box(u_data, group_id, user_id, event),
+            9: lambda u_data: self._prepare_parasite(u_data, group_id, user_id)
         }
         
         result = handlers[item_id](user_data)
@@ -129,14 +133,14 @@ class NiuniuShop:
             return "❌ 变性状态下无法进行男科手术"
             
         # 正常的手术逻辑
-        if random.random() < 0.75:  # 75%成功率
+        if random.random() < 0.5:  # 50%成功率
             user_data['length'] *= 2
             return f"🎉 手术成功！牛牛长度翻倍！\n" \
                    f"📏 现在长度：{self.plugin.format_length(user_data['length'])}"
         else:
-            user_data['length'] = max(1, user_data['length'] // 2)
-            user_data['coins'] += 50
-            return f"💔 手术失败！牛牛变短一半..获得50金币补偿\n" \
+            user_data['length'] = 0
+            user_data['coins'] += 100
+            return f"💔 手术失败！牛牛清零..获得100金币补偿\n" \
                    f"📏 现在长度：{self.plugin.format_length(user_data['length'])}\n" \
                    f"💰 现有金币：{user_data['coins']}"
                    
@@ -319,138 +323,65 @@ class NiuniuShop:
         
         return "✅ 购买成功！春风精灵将在1小时内帮你自动打胶"
         
-    def _handle_chastity_lock(self, user_data):
-        """贞操锁效果处理"""
-        # 使用datetime设置24小时后的结束时间
-        end_time = datetime.datetime.now() + datetime.timedelta(days=1)
-        
-        items = user_data.setdefault('items', {})
-        items['chastity_lock'] = {
-            'end_time': end_time.timestamp()
-        }
-        return "✅ 购买成功！你已装备贞操锁，其他用户无法对你使用道具、比划和锁牛牛，持续1天"
+    async def _handle_mystery_box(self, user_data, group_id, user_id, event):
+        """神秘礼盒效果处理"""
+        # 50%概率获得商品，50%概率获得金币
+        if random.random() < 0.5:
+            # 随机获得一件商品（排除神秘礼盒自身）
+            available_items = [item_id for item_id in self.SHOP_ITEMS.keys() if item_id != 8]
+            item_id = random.choice(available_items)
+            item = self.SHOP_ITEMS[item_id]
+            
+            # 确保items字典存在
+            if 'items' not in user_data:
+                user_data['items'] = {}
+                
+            # 根据道具ID处理不同道具效果
+            handlers = {
+                1: self._handle_viagra,
+                2: self._handle_surgery,
+                3: self._handle_pills,
+                4: lambda u_data: self._prepare_sterilization(u_data, group_id, user_id),
+                5: lambda u_data: self._handle_gender_surgery(u_data, group_id, user_id, event),
+                6: lambda u_data: self._prepare_exchange(u_data, group_id, user_id),
+                7: lambda u_data: self._handle_auto_dajiao(u_data, group_id, user_id, event)
+            }
+            
+            result = handlers[item_id](user_data)
+            if asyncio.iscoroutine(result):
+                result = await result
+                
+            return f"🎁 恭喜你从神秘礼盒中获得了 {item['name']}！\n{item['description']}"
+        else:
+            # 随机获得金币
+            coin_rewards = [
+                (50, 0.3),    # 30%概率获得50金币
+                (100, 0.25),  # 25%概率获得100金币
+                (150, 0.2),   # 20%概率获得150金币
+                (200, 0.15),  # 15%概率获得200金币
+                (300, 0.07),  # 7%概率获得300金币
+                (500, 0.02),  # 2%概率获得500金币
+                (1000, 0.01)  # 1%概率获得1000金币
+            ]
+            
+            # 根据概率选择奖励
+            total_prob = sum(prob for _, prob in coin_rewards)
+            r = random.random() * total_prob
+            cumsum = 0
+            for coins, prob in coin_rewards:
+                cumsum += prob
+                if r <= cumsum:
+                    user_data['coins'] += coins
+                    return f"💰 恭喜你从神秘礼盒中获得了 {coins} 金币！"
+                    
+            # 如果因为浮点数精度问题没有选中任何奖励，默认给50金币
+            user_data['coins'] += 50
+            return f"💰 恭喜你从神秘礼盒中获得了 50 金币！"
     
-    # 使用绝育环
-    async def use_sterilization(self, event, target_id):
-        """使用绝育环"""
-        group_id = str(event.message_obj.group_id)
-        user_id = str(event.get_sender_id())
-        user_data = self.plugin.get_user_data(group_id, user_id)
-        nickname = event.get_sender_name()
-        
-        if not user_data or not user_data.get('items', {}).get('sterilization_ring'):
-            yield event.plain_result("❌ 你没有绝育环")
-            return
-            
-        # 检查目标是否存在
-        target_data = self.plugin.get_user_data(group_id, target_id)
-        if not target_data:
-            yield event.plain_result("❌ 目标用户未注册牛牛")
-            return
-            
-        # 检查目标是否有贞操锁
-        if target_data.get('items', {}).get('chastity_lock'):
-            yield event.plain_result(f"❌ {target_data['nickname']}装备了贞操锁，无法被绝育")
-            return
-            
-        # 应用绝育效果
-        target_data.setdefault('items', {})['sterilized'] = True
-        # 移除使用者的道具
-        del user_data['items']['sterilization_ring']
-        
-        # 清除待绝育状态
-        user_actions = self.last_actions.setdefault(group_id, {}).setdefault(user_id, {})
-        if 'waiting_for_sterilization' in user_actions:
-            del user_actions['waiting_for_sterilization']
-            
-        self._save_data()
-        
-        yield event.plain_result(f"✅ 成功对 {target_data['nickname']} 实施绝育！\n该用户无法进行打胶，需花费150金币解锁")
-    
-    # 解锁绝育
-    async def unlock_sterilization(self, event):
-        """解锁自己的绝育状态"""
-        group_id = str(event.message_obj.group_id)
-        user_id = str(event.get_sender_id())
-        user_data = self.plugin.get_user_data(group_id, user_id)
-        
-        if not user_data:
-            yield event.plain_result("❌ 请先注册牛牛")
-            return
-            
-        if not user_data.get('items', {}).get('sterilized'):
-            yield event.plain_result("❌ 你没有被绝育，无需解锁")
-            return
-            
-        if user_data.get('coins', 0) < 150:
-            yield event.plain_result("❌ 解锁需要150金币")
-            return
-            
-        # 扣费并解锁
-        user_data['coins'] -= 150
-        del user_data['items']['sterilized']
-        self._save_data()
-        
-        yield event.plain_result("✅ 成功解锁！你可以继续打胶了")
-    
-    async def use_exchanger(self, event, target_id):
-        """使用牛子转换器"""
-        group_id = str(event.message_obj.group_id)
-        user_id = str(event.get_sender_id())
-        user_data = self.plugin.get_user_data(group_id, user_id)
-        nickname = event.get_sender_name()
-        
-        if not user_data or not user_data.get('items', {}).get('exchanger'):
-            yield event.plain_result("❌ 你没有牛子转换器")
-            return
-            
-        # 检查目标是否存在
-        target_data = self.plugin.get_user_data(group_id, target_id)
-        if not target_data:
-            yield event.plain_result("❌ 目标用户未注册牛牛")
-            return
-            
-        # 检查目标是否有贞操锁
-        if target_data.get('items', {}).get('chastity_lock'):
-            yield event.plain_result(f"❌ {target_data['nickname']}装备了贞操锁，无法交换牛子")
-            return
-
-        # 检查双方是否有人处于变性状态
-        if self.is_gender_surgery_active(group_id, target_id):
-            yield event.plain_result(f"❌ {target_data['nickname']}正处于变性状态，无法交换牛子")
-            return
-        
-        if self.is_gender_surgery_active(group_id, user_id):
-            yield event.plain_result(f"❌ 你正处于变性状态，无法交换牛子")
-            return
-            
-        # 检查自己是否和目标用户相同
-        if user_id == target_id:
-            yield event.plain_result("❌ 不能与自己交换牛子")
-            return
-            
-        # 交换长度
-        user_length = user_data['length']
-        target_length = target_data['length']
-        
-        user_data['length'] = target_length
-        target_data['length'] = user_length
-        
-        # 移除使用者的道具
-        del user_data['items']['exchanger']
-        
-        # 清除待交换状态
-        user_actions = self.last_actions.setdefault(group_id, {}).setdefault(user_id, {})
-        if 'waiting_for_exchange' in user_actions:
-            del user_actions['waiting_for_exchange']
-            
-        self._save_data()
-        
-        yield event.plain_result(
-            f"✅ 成功与 {target_data['nickname']} 交换了牛牛长度！\n"
-            f"你的牛牛现在是: {self.plugin.format_length(user_data['length'])}\n"
-            f"{target_data['nickname']}的牛牛现在是: {self.plugin.format_length(target_data['length'])}"
-        )
+    # 删除贞操锁相关方法
+    def has_chastity_lock(self, group_id, user_id):
+        """检查用户是否有贞操锁 - 移除后始终返回False"""
+        return False
     
     def is_sterilized(self, group_id, user_id):
         """检查用户是否被绝育"""
@@ -458,44 +389,6 @@ class NiuniuShop:
         if not user_data:
             return False
         return user_data.get('items', {}).get('sterilized', False)
-    
-    def has_chastity_lock(self, group_id, user_id):
-        """检查用户是否有贞操锁"""
-        user_data = self.plugin.get_user_data(group_id, user_id)
-        if not user_data:
-            return False
-            
-        # 获取贞操锁信息
-        lock_data = user_data.get('items', {}).get('chastity_lock')
-        if not lock_data:
-            return False
-        
-        # 检查是否为旧版本布尔类型
-        if isinstance(lock_data, bool):
-            # 如果是布尔值True，转换为字典格式
-            if lock_data:
-                user_data['items']['chastity_lock'] = {
-                    'end_time': time.time() + 86400  # 24小时
-                }
-                self._save_data()
-                return True
-            else:
-                del user_data['items']['chastity_lock']
-                self._save_data()
-                return False
-        
-        # 正常字典类型处理
-        end_timestamp = lock_data.get('end_time')
-        if not end_timestamp:
-            return False
-            
-        if time.time() > end_timestamp:
-            # 自动清理过期状态
-            del user_data['items']['chastity_lock']
-            self._save_data()
-            return False
-            
-        return True
     
     def is_gender_surgery_active(self, group_id, user_id):
         """检查用户是否正在变性状态"""
@@ -606,39 +499,10 @@ class NiuniuShop:
             shop_text = self.get_shop_text(user_data.get('coins', 0))
             yield event.plain_result(shop_text)
     
-    # 添加获取贞操锁剩余时间的方法
+    # 删除贞操锁相关方法
     def get_chastity_lock_time_left(self, group_id, user_id):
-        """获取贞操锁剩余时间文本"""
-        user_data = self.plugin.get_user_data(group_id, user_id)
-        if not user_data or 'items' not in user_data:
-            return None
-            
-        lock_data = user_data['items'].get('chastity_lock')
-        if not lock_data:
-            return None
-            
-        end_timestamp = lock_data.get('end_time')
-        if not end_timestamp:
-            return None
-            
-        now = datetime.datetime.now()
-        end_time = datetime.datetime.fromtimestamp(end_timestamp)
-        
-        if end_time <= now:
-            # 贞操锁已过期，自动移除
-            del user_data['items']['chastity_lock']
-            self._save_data()
-            return None
-            
-        # 计算剩余时间
-        time_left = end_time - now
-        hours = time_left.seconds // 3600
-        minutes = (time_left.seconds % 3600) // 60
-        
-        if time_left.days > 0:
-            return f"{time_left.days}天{hours}小时{minutes}分钟"
-        else:
-            return f"{hours}小时{minutes}分钟"
+        """获取贞操锁剩余时间 - 移除后返回None"""
+        return None
     
     def get_gender_surgery_time_left(self, group_id, user_id):
         """获取变性手术剩余时间文本"""
@@ -663,63 +527,7 @@ class NiuniuShop:
         
         return f"{hours}小时{minutes}分钟"
     
-    # 修复监控贞操锁的方法
-    async def monitor_chastity_locks(self):
-        """监控并清理过期的贞操锁"""
-        while True:
-            try:
-                now = time.time()
-                for group_id, group_data in self.plugin.niuniu_lengths.items():
-                    if not isinstance(group_data, dict):
-                        continue
-                        
-                    for user_id, user_data in group_data.items():
-                        if not isinstance(user_data, dict) or 'items' not in user_data:
-                            continue
-                            
-                        # 检查贞操锁
-                        if 'chastity_lock' in user_data['items']:
-                            lock_data = user_data['items']['chastity_lock']
-                            # 检查lock_data是否为字典类型
-                            if not isinstance(lock_data, dict):
-                                # 如果不是字典，可能是旧版本的bool类型，修复它
-                                user_data['items']['chastity_lock'] = {
-                                    'end_time': now + 86400  # 设置24小时后过期
-                                }
-                                self._save_data()
-                                continue
-
-                            end_time = lock_data.get('end_time')
-                            
-                            if end_time and now > end_time:
-                                # 贞操锁过期，移除
-                                del user_data['items']['chastity_lock']
-                                self._save_data()
-                                
-                                # 获取用户群和会话信息
-                                if 'nickname' in user_data:
-                                    nickname = user_data['nickname']
-                                    try:
-                                        # 构建消息链
-                                        message_chain = MessageChain([
-                                            At(qq=user_id),
-                                            Plain(f" 小南娘：你的贞操锁已经失效了哦~")
-                                        ])
-                                        # 获取该群的第一个会话ID
-                                        for event in self.context.unified_msg_list:
-                                            if str(event.message_obj.group_id) == str(group_id):
-                                                unified_msg = event.unified_msg_origin
-                                                await self.context.send_message(unified_msg, message_chain)
-                                                break
-                                    except Exception as e:
-                                        print(f"发送贞操锁失效提醒失败: {str(e)}")
-                
-            except Exception as e:
-                print(f"监控贞操锁时出错: {str(e)}")
-                
-            await asyncio.sleep(600)
-    
-    # 修改变性状态监控方法中的消息
+    # 删除贞操锁监控任务
     async def monitor_gender_surgeries(self):
         """监控并处理过期的变性手术"""
         while True:
@@ -773,7 +581,6 @@ class NiuniuShop:
                 
             await asyncio.sleep(600)
     
-    # 添加获取春风精灵剩余时间的方法
     def get_spring_fairy_time_left(self, group_id, user_id):
         """获取春风精灵剩余时间文本"""
         user_data = self.plugin.get_user_data(group_id, user_id)
@@ -799,7 +606,6 @@ class NiuniuShop:
         
         return f"{minutes}分钟{seconds}秒"
     
-    # 添加背包查看功能
     async def show_backpack(self, event):
         """显示用户背包"""
         group_id = str(event.message_obj.group_id)
@@ -852,12 +658,6 @@ class NiuniuShop:
         if items.get('exchanger'):
             backpack_text += "🔄 牛子转换器: 可使用\n"
             
-        # 处理贞操锁
-        if 'chastity_lock' in items:
-            time_left = self.get_chastity_lock_time_left(group_id, user_id)
-            if time_left:
-                backpack_text += f"🔒 贞操锁: 剩余{time_left}\n"
-            
         # 处理春风精灵
         if 'spring_fairy' in items:
             time_left = self.get_spring_fairy_time_left(group_id, user_id)
@@ -872,14 +672,12 @@ class NiuniuShop:
         
         yield event.plain_result(backpack_text)
         
-    # 新增方法：获取用户当前的牛牛称呼（变性状态下为"洞洞"）
     def get_niuniu_name(self, group_id, user_id):
         """获取用户当前的牛牛称呼，变性状态下为"洞洞"，否则为"牛牛" """
         if self.is_gender_surgery_active(group_id, user_id):
             return "洞洞"
         return "牛牛"
     
-    # 添加扣豆功能处理方法
     async def process_kou_doudou(self, event, target_id):
         """处理扣豆功能"""
         group_id = str(event.message_obj.group_id)
@@ -898,12 +696,6 @@ class NiuniuShop:
         # 检查目标是否处于变性状态
         if not self.is_gender_surgery_active(group_id, target_id):
             yield event.plain_result(f"❌ {target_nickname}没有变性，不能扣豆！")
-            return
-        
-        # 检查目标是否有贞操锁
-        if self.has_chastity_lock(group_id, target_id):
-            time_left = self.get_chastity_lock_time_left(group_id, target_id)
-            yield event.plain_result(f"❌ {target_nickname}装备了贞操锁，无法被扣豆\n剩余时间: {time_left}")
             return
         
         # 检查是否为自己
@@ -927,7 +719,6 @@ class NiuniuShop:
         # 显示结果
         yield event.plain_result(f"💦 {target_nickname}被{nickname}扣爽了，洞洞深了{depth_increase}cm！\n现在洞洞深度: {surgery_data['hole_depth']}cm")
     
-    # 修改获取变性手术剩余时间的方法，增加显示洞洞深度
     def get_gender_surgery_time_left(self, group_id, user_id):
         """获取变性手术剩余时间文本"""
         user_data = self.plugin.get_user_data(group_id, user_id)
@@ -951,7 +742,6 @@ class NiuniuShop:
         
         return f"{hours}小时{minutes}分钟"
     
-    # 添加方法获取洞洞深度
     def get_hole_depth(self, group_id, user_id):
         """获取用户洞洞深度"""
         user_data = self.plugin.get_user_data(group_id, user_id)
@@ -959,3 +749,88 @@ class NiuniuShop:
             return 0
             
         return user_data['gender_surgery'].get('hole_depth', 0)
+
+    def _prepare_parasite(self, user_data, group_id, user_id):
+        """寄生虫购买后准备"""
+        items = user_data.setdefault('items', {})
+        items['parasite'] = True
+        self.last_actions.setdefault(group_id, {}).setdefault(user_id, {})['waiting_for_parasite'] = True
+        return "✅ 购买成功！请发送\"寄生 @用户名\"或\"寄生 用户名\"来使用"
+
+    def is_parasited(self, group_id, user_id):
+        """检查用户是否被寄生"""
+        user_data = self.plugin.get_user_data(group_id, user_id)
+        if not user_data or 'parasite_info' not in user_data:
+            return False, None
+        
+        parasite_info = user_data['parasite_info']
+        current_time = time.time()
+        
+        if current_time > parasite_info['end_time']:
+            # 寄生已过期，清除信息
+            del user_data['parasite_info']
+            self._save_data()
+            return False, None
+            
+        return True, parasite_info['parasite_owner']
+
+    def get_parasite_time_left(self, group_id, user_id):
+        """获取寄生虫剩余时间"""
+        user_data = self.plugin.get_user_data(group_id, user_id)
+        if not user_data or 'parasite_info' not in user_data:
+            return None
+            
+        current_time = time.time()
+        end_time = user_data['parasite_info']['end_time']
+        remaining = end_time - current_time
+        
+        if remaining <= 0:
+            del user_data['parasite_info']
+            self._save_data()
+            return None
+            
+        hours = int(remaining // 3600)
+        minutes = int((remaining % 3600) // 60)
+        return f"{hours}小时{minutes}分钟"
+
+    async def use_parasite(self, event, target_id):
+        """使用寄生虫"""
+        group_id = str(event.message_obj.group_id)
+        user_id = str(event.get_sender_id())
+        nickname = event.get_sender_name()
+        
+        # 检查目标用户是否存在
+        target_data = self.plugin.get_user_data(group_id, target_id)
+        if not target_data:
+            yield event.plain_result("❌ 目标用户未注册牛牛")
+            return
+            
+        # 检查目标是否已被寄生
+        is_parasited, parasite_owner = self.is_parasited(group_id, target_id)
+        if is_parasited:
+            owner_data = self.plugin.get_user_data(group_id, parasite_owner)
+            owner_name = owner_data['nickname'] if owner_data else "未知用户"
+            yield event.plain_result(f"❌ 该用户已经被 {owner_name} 寄生了")
+            return
+            
+        # 设置寄生效果
+        end_time = time.time() + 24 * 3600  # 24小时后结束
+        target_data['parasite_info'] = {
+            'parasite_owner': user_id,
+            'end_time': end_time
+        }
+        
+        # 清除使用标记
+        user_actions = self.last_actions.get(group_id, {}).get(user_id, {})
+        if 'waiting_for_parasite' in user_actions:
+            del user_actions['waiting_for_parasite']
+        
+        # 清除道具
+        user_data = self.plugin.get_user_data(group_id, user_id)
+        if 'parasite' in user_data.get('items', {}):
+            del user_data['items']['parasite']
+            
+        self._save_data()
+        
+        yield event.plain_result(f"🦠 {nickname} 成功将寄生虫放入了 {target_data['nickname']} 的牛牛中！\n"
+                               f"接下来24小时内，ta牛牛增长的50%都会被你窃取！")

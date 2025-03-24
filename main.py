@@ -23,6 +23,8 @@ from timer_test import TimerTest
 from niuniu_redpacket import NiuniuRedPacket
 # 添加集市模块导入
 from niuniu_market import NiuniuMarket
+# 添加税收系统导入
+from tax_system import TaxSystem
 
 # 常量定义
 PLUGIN_DIR = os.path.join('data', 'plugins', 'astrbot_plugin_niuniu')
@@ -33,7 +35,7 @@ LAST_ACTION_FILE = os.path.join(PLUGIN_DIR, 'last_actions.yml')
 UPDATES_FILE = os.path.join(current_dir, 'updates.txt')  # 添加更新记录文件路径
 LOCK_COOLDOWN = 300  # 锁牛牛冷却时间 5分钟
 
-@register("niuniu_plugin", "长安某", "牛牛插件，包含注册牛牛、打胶、我的牛牛、比划比划、牛牛排行等功能", "3.4.2")
+@register("niuniu_plugin", "长安某", "牛牛插件，包含注册牛牛、打胶、我的牛牛、比划比划、牛牛排行等功能", "3.5.0")
 class NiuniuPlugin(Star):
     # 冷却时间常量（秒）
     COOLDOWN_10_MIN = 600    # 10分钟
@@ -63,10 +65,10 @@ class NiuniuPlugin(Star):
         self.redpacket = NiuniuRedPacket(self)
         # 初始化牛牛集市
         self.market = NiuniuMarket(self)
+        # 初始化税收系统
+        self.tax_system = TaxSystem(self)
         
-        # 启动贞操锁监控任务
-        asyncio.create_task(self.shop.monitor_chastity_locks())
-        # 启动变性手术监控任务
+        # 保留变性手术监控任务
         asyncio.create_task(self.shop.monitor_gender_surgeries())
         self.bull_kings = {}  # 记录每个群的牛王 {str(group_id): str(user_id)}
     
@@ -368,13 +370,19 @@ class NiuniuPlugin(Star):
 
     # region 事件处理
     niuniu_commands = ["牛牛菜单", "牛牛开", "牛牛关", "注册牛牛", "打胶", "我的牛牛", "比划比划", "牛牛排行", "锁牛牛", "打工", "打工时间", "牛牛日历", 
-                       "牛牛集市", "查看集市", "上架牛牛", "购买牛牛", "回收牛牛"]
+                       "牛牛商城", "牛牛背包", "每日签到", "送金币", "发红包", "抢红包", "牛牛集市", "群账户", "管理员转账"]  # 添加群账户命令
 
     @event_message_type(EventMessageType.GROUP_MESSAGE)
     async def on_group_message(self, event: AstrMessageEvent):
         """群聊消息处理器"""
         group_id = str(event.message_obj.group_id)
         msg = event.message_str.strip()
+
+        # Add stop work command before other commands
+        if msg == "停止打工":
+            async for result in self._stop_work(event):
+                yield result
+            return
 
         # 添加查看更新命令处理
         if msg == "查看更新"or msg == "牛牛更新":
@@ -406,7 +414,16 @@ class NiuniuPlugin(Star):
                 yield result
             return
 
-        # 添加购买命令的处理
+        # 添加牛牛集市相关命令处理 - 确保先于"购买"命令处理
+        if (msg == "牛牛集市" or msg == "查看集市" or msg == "集市列表" or 
+            msg.startswith("上架牛牛") or msg.startswith("购买牛牛") or 
+            msg.startswith("下架牛牛") or msg == "回收牛牛" or 
+            msg == "确认回收牛牛"):
+            async for result in self.market.process_market_command(event):
+                yield result
+            return
+
+        # 添加购买命令的处理 - 放在处理集市命令之后
         if msg.startswith("购买"):
             # 将购买命令直接传递给shop模块处理
             async for result in self.shop.process_purchase_command(event):
@@ -428,6 +445,12 @@ class NiuniuPlugin(Star):
         # 添加调换命令处理
         if msg.startswith("调换"):
             async for result in self._handle_exchange(event):
+                yield result
+            return
+            
+        # 添加寄生命令处理
+        if msg.startswith("寄生"):
+            async for result in self._handle_parasite(event):
                 yield result
             return
         
@@ -454,10 +477,73 @@ class NiuniuPlugin(Star):
                 yield result
             return
 
-        # 添加牛牛集市相关命令处理
-        if msg == "牛牛集市"or msg.startswith("上架牛牛") or msg == "查看集市" or msg.startswith("购买牛牛") or msg == "回收牛牛":
-            async for result in self.market.process_market_command(event):
-                yield result
+        # 处理群账户相关命令
+        if msg.startswith("群账户"):
+            user_id = str(event.get_sender_id())
+            if not self.is_admin(user_id):
+                yield event.plain_result("❌ 只有管理员才能使用群账户功能")
+                return
+                
+            if msg == "群账户":
+                # 显示群账户余额
+                balance = self.tax_system.get_treasury_balance(group_id)
+                yield event.plain_result(f"💰 群账户余额：{balance}金币\n\n{self.tax_system.show_treasury_menu()}")
+                
+            elif msg.startswith("群账户 发工资"):
+                try:
+                    amount = int(msg.replace("群账户 发工资", "").strip())
+                    if amount <= 0:
+                        yield event.plain_result("❌ 金额必须大于0")
+                        return
+                        
+                    success, result = self.tax_system.distribute_salary(group_id, amount)
+                    yield event.plain_result(result)
+                except ValueError:
+                    yield event.plain_result("❌ 请输入正确的金额，例如：群账户 发工资 1000")
+                    
+            elif msg.startswith("群账户 转账"):
+                # 解析目标用户和金额
+                target_id = self.parse_at_target(event)
+                if not target_id:
+                    yield event.plain_result("❌ 请指定转账目标")
+                    return
+                    
+                try:
+                    amount = int(msg.split()[-1])
+                    if amount <= 0:
+                        yield event.plain_result("❌ 金额必须大于0")
+                        return
+                        
+                    success, result = self.tax_system.transfer_to_user(group_id, target_id, amount)
+                    yield event.plain_result(result)
+                except (ValueError, IndexError):
+                    yield event.plain_result("❌ 请输入正确的金额，例如：群账户 转账 @用户 1000")
+                return
+
+        # 处理管理员直接转账命令
+        if msg.startswith("管理员转账"):
+            user_id = str(event.get_sender_id())
+            if not self.is_admin(user_id):
+                yield event.plain_result("❌ 只有管理员才能使用直接转账功能")
+                return
+                
+            # 获取@的目标用户
+            target_id = self.parse_at_target(event)
+            if not target_id:
+                yield event.plain_result("❌ 请@要转账的用户")
+                return
+                
+            # 解析金额
+            try:
+                amount = int(msg.split()[-1])
+                if amount <= 0:
+                    yield event.plain_result("❌ 金额必须大于0")
+                    return
+                    
+                async for result in self._admin_direct_transfer(event, target_id, amount):
+                    yield result
+            except (ValueError, IndexError):
+                yield event.plain_result("❌ 请输入正确的金额，例如：@用户 管理员转账 1000")
             return
 
         handler_map = {
@@ -533,49 +619,33 @@ class NiuniuPlugin(Star):
 
         group_data = self.get_group_data(group_id)
         if not group_data.get('plugin_enabled', False):
-            chain = [
-                At(qq=event.get_sender_id()),
-                Plain("\n❌ 插件未启用")
-            ]
-            yield event.chain_result(chain)
+            yield event.plain_result("❌ 插件未启用")
             return
 
+        # 检查用户是否在打工中
+        if self._is_user_working(group_id, user_id):
+            yield event.plain_result(f"小南娘：{nickname}，服务的时候要认真哦！")
+            return
+
+        # 检查用户是否注册
         user_data = self.get_user_data(group_id, user_id)
         if not user_data:
-            chain = [
-                At(qq=event.get_sender_id()),
-                Plain("\n❌ 请先注册牛牛")
-            ]
-            yield event.chain_result(chain)
-            return
-
-        # 检查是否已在打工中
-        if self._is_user_working(group_id, user_id):
-            chain = [
-                At(qq=event.get_sender_id()),
-                Plain(f"\n小南娘：{nickname}，你已经在工作中了哦~")
-            ]
-            yield event.chain_result(chain)
+            yield event.plain_result("❌ 请先注册牛牛")
             return
 
         # 解析打工时长
         msg = event.message_str.strip()
-        match = re.search(r'打工\s*(\d+)\s*小时', msg)
-        if not match:
-            chain = [
-                At(qq=event.get_sender_id()),
-                Plain("\n❌ 请输入正确的打工时长，例如：打工 2小时")
-            ]
-            yield event.chain_result(chain)
+        if msg.startswith("打工"):
+            msg = msg[len("打工"):].strip()
+        
+        try:
+            hours = float(msg)
+        except ValueError:
+            yield event.plain_result("❌ 请输入正确的打工时长，例如：打工 1.5")
             return
-
-        hours = int(match.group(1))
+            
         if hours <= 0:
-            chain = [
-                At(qq=event.get_sender_id()),
-                Plain("\n❌ 打工时长必须大于0小时")
-            ]
-            yield event.chain_result(chain)
+            yield event.plain_result("❌ 打工时长必须大于0")
             return
             
         if hours > self.MAX_WORK_HOURS:
@@ -611,8 +681,11 @@ class NiuniuPlugin(Star):
         coins_per_hour = (3600 // self.WORK_REWARD_INTERVAL) * self.WORK_REWARD_COINS
         total_coins = int(coins_per_hour * hours * multiplier)
         
+        # 计算税收
+        after_tax, tax = self.tax_system.process_coins(group_id, total_coins)
+        
         # 更新用户金币
-        user_data['coins'] = user_data.get('coins', 0) + total_coins
+        user_data['coins'] = user_data.get('coins', 0) + after_tax
         self._save_niuniu_lengths()
         
         # 记录打工信息到last_actions
@@ -629,7 +702,10 @@ class NiuniuPlugin(Star):
         # 发送开始打工的消息
         chain = [
             At(qq=event.get_sender_id()),
-            Plain(f"\n小南娘：{nickname}要去陪客户{hours}小时，已经提前拿到{total_coins}金币啦~\n现在金币余额：{user_data['coins']}💰\n(打工期间无法使用其他牛牛功能)")
+            Plain(f"\n小南娘：{nickname}要去陪客户{hours}小时，已经提前拿到{after_tax}金币啦~\n"
+                  f"缴纳税款：{tax}金币\n"
+                  f"现在金币余额：{user_data['coins']}💰\n"
+                  f"(打工期间无法使用其他牛牛功能)")
         ]
         yield event.chain_result(chain)
 
@@ -646,7 +722,12 @@ class NiuniuPlugin(Star):
         # 存储任务引用，防止被垃圾回收
         if not hasattr(self, '_work_tasks'):
             self._work_tasks = {}
-        self._work_tasks[task_id] = task
+        self._work_tasks[task_id] = {
+            'task': task,
+            'coins': total_coins,
+            'hours': hours,
+            'start_time': time.time()
+        }
         
         # 设置清理回调
         task.add_done_callback(lambda t: self._work_tasks.pop(task_id, None))
@@ -789,6 +870,63 @@ class NiuniuPlugin(Star):
         ]
         yield event.chain_result(chain)
 
+    async def _stop_work(self, event):
+        """停止打工功能"""
+        group_id = str(event.message_obj.group_id)
+        user_id = str(event.get_sender_id())
+        nickname = event.get_sender_name()
+
+        # Check if user is working
+        if not self._is_user_working(group_id, user_id):
+            yield event.plain_result(f"小南娘：{nickname}，你现在没有在工作哦~")
+            return
+
+        # Find user's work task
+        task_id = None
+        task_info = None
+        for tid, info in self._work_tasks.items():
+            if tid.startswith(f"work_{group_id}_{user_id}_"):
+                task_id = tid
+                task_info = info
+                break
+
+        if not task_info:
+            yield event.plain_result("❌ 无法找到打工任务")
+            return
+
+        # Calculate remaining time and coins to deduct
+        elapsed_time = time.time() - task_info['start_time']
+        total_time = task_info['hours'] * 3600
+        remaining_ratio = (total_time - elapsed_time) / total_time
+        coins_to_deduct = int(task_info['coins'] * remaining_ratio)
+        
+        # Get user data and update coins
+        user_data = self.get_user_data(group_id, user_id)
+        if not user_data:
+            yield event.plain_result("❌ 用户数据异常")
+            return
+
+        # Deduct coins and penalty
+        total_deduction = coins_to_deduct + 50  # Add 50 coins penalty
+        user_data['coins'] = max(0, user_data['coins'] - total_deduction)
+        
+        # Cancel the task
+        task_info['task'].cancel()
+        self._work_tasks.pop(task_id, None)
+        
+        # Clear work status
+        user_actions = self.last_actions.get(group_id, {}).get(user_id, {})
+        if 'work_data' in user_actions:
+            del user_actions['work_data']
+        self._save_last_actions()
+        self._save_niuniu_lengths()
+
+        # Send notification
+        yield event.plain_result(
+            f"💔 小南娘：{nickname}受不了被狠狠蹂躏，直接逃跑了！\n"
+            f"被扣除了{coins_to_deduct}金币，并且被额外罚款50金币\n"
+            f"当前金币余额：{user_data['coins']}"
+        )
     # endregion
 
     # region 核心功能
@@ -942,20 +1080,30 @@ class NiuniuPlugin(Star):
             if viagra_remaining is not False:  # 伟哥使用成功，返回剩余次数
                 # 伟哥效果固定增加长度10-20cm
                 change = random.randint(10, 20)
-                user_data['length'] += change
+                actual_increase, stolen_amount, parasite_info = self._handle_length_increase(group_id, user_id, change)
+                
                 # 更新最后打胶时间，但不影响冷却（伟哥特性）
                 self.last_actions.setdefault(group_id, {}).setdefault(user_id, {})['last_viagra_use'] = current_time
                 self._save_last_actions()
                 self._save_niuniu_lengths()
                 
-                # 添加剩余次数提示
-                remaining_text = f"剩余{viagra_remaining}次" if viagra_remaining > 0 else "已用完"
+                # 构建消息
+                msg_parts = [
+                    f"💊 使用伟哥打胶成功！({f'剩余{viagra_remaining}次' if viagra_remaining > 0 else '已用完'})",
+                ]
                 
-                yield event.plain_result(
-                    f"💊 使用伟哥打胶成功！({remaining_text})\n"
-                    f"📏 长度增加: +{change}cm\n"
-                    f"💪 当前长度: {self.format_length(user_data['length'])}"
-                )
+                if parasite_info:  # 如果被寄生
+                    msg_parts.extend([
+                        f"📏 实际增加: +{actual_increase}cm",
+                        f"🦠 被 {parasite_info['owner_name']} 窃取: {stolen_amount}cm",
+                        f"⏳ 寄生剩余时间: {parasite_info['time_left']}"
+                    ])
+                else:
+                    msg_parts.append(f"📏 长度增加: +{actual_increase}cm")
+                    
+                msg_parts.append(f"💪 当前长度: {self.format_length(user_data['length'])}")
+                
+                yield event.plain_result("\n".join(msg_parts))
                 return
             else:
                 # 没有伟哥且在冷却中，提示等待
@@ -989,21 +1137,33 @@ class NiuniuPlugin(Star):
                 template = random.choice(self.niuniu_texts['dajiao']['decrease_30min'])
 
         # 应用变化
-        user_data['length'] = max(1, user_data['length'] + change)
+        if change > 0:
+            actual_increase, stolen_amount, parasite_info = self._handle_length_increase(group_id, user_id, change)
+            template = random.choice(self.niuniu_texts['dajiao']['increase'])
+            
+            # 构建消息
+            msg_parts = []
+            if parasite_info:  # 如果被寄生
+                msg_parts.extend([
+                    template.format(nickname=nickname, change=actual_increase),
+                    f"🦠 被 {parasite_info['owner_name']} 窃取: {stolen_amount}cm",
+                    f"⏳ 寄生剩余时间: {parasite_info['time_left']}"
+                ])
+            else:
+                msg_parts.append(template.format(nickname=nickname, change=actual_increase))
+        else:
+            user_data['length'] = max(1, user_data['length'] + change)
+            if change < 0:
+                msg_parts = [template.format(nickname=nickname, change=abs(change))]
+            else:
+                msg_parts = [random.choice(self.niuniu_texts['dajiao']['no_effect']).format(nickname=nickname)]
+
         self.last_actions.setdefault(group_id, {}).setdefault(user_id, {})['dajiao'] = current_time
         self._save_last_actions()
         self._save_niuniu_lengths()
 
-        # 生成消息
-        if change > 0:
-            template = random.choice(self.niuniu_texts['dajiao']['increase'])
-        elif change < 0:
-            template = template  
-        else:
-            template = random.choice(self.niuniu_texts['dajiao']['no_effect'])
-
-        text = template.format(nickname=nickname, change=abs(change))
-        yield event.plain_result(f"{text}\n当前长度：{self.format_length(user_data['length'])}")
+        msg_parts.append(f"当前长度：{self.format_length(user_data['length'])}")
+        yield event.plain_result("\n".join(msg_parts))
 
     async def _transfer_coins(self, event):
         """金币转赠功能"""
@@ -1050,7 +1210,7 @@ class NiuniuPlugin(Star):
             target_name = parts[0]
             # 在群内查找匹配的用户
             for uid, data in group_data.items():
-                if isinstance(data, dict) and 'nickname' in data:
+                if isinstance(data, dict) or 'nickname' in data:
                     if target_name in data['nickname']:
                         target_id = uid
                         break
@@ -1282,12 +1442,6 @@ class NiuniuPlugin(Star):
         compare_records[target_id] = current_time
         compare_records['count'] = compare_count + 1
 
-        # 检查目标是否有贞操锁
-        if self.shop.has_chastity_lock(group_id, target_id):
-            time_left = self.shop.get_chastity_lock_time_left(group_id, target_id)
-            yield event.plain_result(f"❌ {target_data['nickname']}装备了贞操锁，无法被比划\n剩余时间: {time_left}")
-            return
-
         # 添加变性状态检查
         if self.shop.is_gender_surgery_active(group_id, user_id):
             yield event.plain_result(f"❌ {nickname}，变性状态下牛牛无法变长哦~")
@@ -1334,12 +1488,12 @@ class NiuniuPlugin(Star):
             # 计算胜利效果
             gain = random.randint(0, 3)
             loss = random.randint(1, 2)
-            user_data['length'] += gain
+            actual_gain, stolen_gain, parasite_info = self._handle_length_increase(group_id, user_id, gain)
             target_data['length'] = max(1, target_data['length'] - loss)
             text = random.choice(self.niuniu_texts['compare']['win']).format(
                 nickname=nickname,
                 target_nickname=target_data['nickname'],
-                gain=gain
+                gain=actual_gain
             )
             text = f"💊 六味地黄丸生效！必胜！\n{text}"
             
@@ -1371,27 +1525,21 @@ class NiuniuPlugin(Star):
         if random.random() < win_prob:
             gain = random.randint(0, 3)
             loss = random.randint(1, 2)
-            user_data['length'] += gain
+            actual_gain, stolen_gain, parasite_info = self._handle_length_increase(group_id, user_id, gain)
             target_data['length'] = max(1, target_data['length'] - loss)
             text = random.choice(self.niuniu_texts['compare']['win']).format(
                 nickname=nickname,
                 target_nickname=target_data['nickname'],
-                gain=gain
+                gain=actual_gain
             )
-            total_gain = gain
+            total_gain = actual_gain
             if (u_len - t_len) <= -20 and user_data['hardness'] < target_data['hardness']:
                 # 修正判断：用户长度比对方小20cm以上为极大劣势
                 extra_gain = random.randint(0, 5)  # 额外的奖励值
                 user_data['length'] += extra_gain
                 total_gain += extra_gain
                 text += f"\n🎁 由于极大劣势获胜，额外增加 {extra_gain}cm！"
-            if abs(u_len - t_len) > 10 and u_len < t_len:
-                stolen_length = int(target_data['length'] * 0.2)
-                user_data['length'] += stolen_length
-                total_gain += stolen_length
-                target_data['length'] = max(1, target_data['length'] - stolen_length)
-                text += f"\n🎉 {nickname} 战胜了 {target_data['nickname']}，掠夺了 {stolen_length}cm 的长度！"
-            if abs(u_len - t_len) <= 5 and user_data['hardness'] > target_data['hardness']:
+            if (u_len - t_len)<= 5 and user_data['hardness'] > target_data['hardness']:
                 text += f"\n🎉 {nickname} 因硬度优势获胜！"
             if total_gain == 0:
                 text += f"\n{self.niuniu_texts['compare']['user_no_increase'].format(nickname=nickname)}"
@@ -1402,19 +1550,21 @@ class NiuniuPlugin(Star):
             
             # 随机奖励金币
             coins_reward = random.randint(10, 20)
-            user_data['coins'] = user_data.get('coins', 0) + coins_reward
+            # 计算税收
+            after_tax, tax = self.tax_system.process_coins(group_id, coins_reward)
+            user_data['coins'] = user_data.get('coins', 0) + after_tax
             
             # 检查连胜奖励
             _, reward_message = self.check_win_streak_rewards(group_id, user_id, user_data)
             
             # 更新消息
-            text += f"\n💰 胜利奖励: +{coins_reward}金币"
+            text += f"\n💰 胜利奖励: +{after_tax}金币（缴纳税款：{tax}金币）"
             if reward_message:
                 text += reward_message
         else:
             gain = random.randint(0, 3)
             loss = random.randint(1, 2)
-            target_data['length'] += gain
+            actual_gain, stolen_gain, parasite_info = self._handle_length_increase(group_id, target_id, gain)
             user_data['length'] = max(1, user_data['length'] - loss)
             text = random.choice(self.niuniu_texts['compare']['lose']).format(
                 nickname=nickname,
@@ -1576,7 +1726,7 @@ class NiuniuPlugin(Star):
 
     async def _show_menu(self, event):
         """显示菜单"""
-        menu_text = self.niuniu_texts['menu']['default'] + "\n🏪 牛牛集市 - 交易各种牛牛\n📃 查看更新 - 查看插件更新内容"
+        menu_text = self.niuniu_texts['menu']['default']
         yield event.plain_result(menu_text)
 
     async def _lock_niuniu(self, event):
@@ -1616,13 +1766,7 @@ class NiuniuPlugin(Star):
         if not target_data:
             yield event.plain_result(self.niuniu_texts['lock']['target_not_registered'].format(nickname=nickname))
             return
-            
-        # 检查目标是否有贞操锁或变性状态
-        if self.shop.has_chastity_lock(group_id, target_id):
-            time_left = self.shop.get_chastity_lock_time_left(group_id, target_id)
-            yield event.plain_result(f"❌ {target_data['nickname']}装备了贞操锁，无法被锁牛牛\n剩余时间: {time_left}")
-            return
-        
+
         # 添加变性状态检查
         if self.shop.is_gender_surgery_active(group_id, target_id):
             surgery_time = self.shop.get_gender_surgery_time_left(group_id, target_id)
@@ -1651,7 +1795,7 @@ class NiuniuPlugin(Star):
         
         # 检查5分钟内锁定的不同用户数量
         recent_locks = len(lock_records)
-        if recent_locks >= 3 or target_id not in lock_records:
+        if recent_locks >= 3:  # 修改这里：移除了 "or target_id not in lock_records"
             yield event.plain_result("❌ 5分钟内只能锁3个不同用户的牛牛")
             return
 
@@ -1807,11 +1951,6 @@ class NiuniuPlugin(Star):
         # 不能锁自己
         if target_id == user_id:
             yield event.plain_result("❌ 不能锁自己的牛牛")
-            return
-            
-        # 检查目标是否有贞操锁
-        if self.shop.has_chastity_lock(group_id, target_id):
-            yield event.plain_result(f"❌ {target_data['nickname']}装备了贞操锁，无法被锁牛牛")
             return
             
         # 检查冷却时间
@@ -2102,11 +2241,13 @@ class NiuniuPlugin(Star):
         
         for streak, coins in rewards.items():
             if win_streak >= streak and streak not in streak_rewards:
+                # 计算税收
+                after_tax, tax = self.tax_system.process_coins(group_id, coins)
                 # 发放奖励
-                user_data['coins'] = user_data.get('coins', 0) + coins
+                user_data['coins'] = user_data.get('coins', 0) + after_tax
                 streak_rewards.append(streak)
-                reward_coins += coins
-                reward_message = f"\n🎖️ 连胜{streak}次！奖励{coins}金币！"
+                reward_coins += after_tax
+                reward_message = f"\n🎖️ 连胜{streak}次！奖励{after_tax}金币（缴纳税款：{tax}金币）！"
         
         # 更新奖励记录
         user_data['streak_rewards'] = streak_rewards
@@ -2166,5 +2307,136 @@ class NiuniuPlugin(Star):
         else:
             result = updates
             
+        yield event.plain_result(result)
+
+    def _handle_length_increase(self, group_id, user_id, increase_amount):
+        """处理牛牛长度增加，考虑寄生虫效果"""
+        user_data = self.get_user_data(group_id, user_id)
+        if not user_data:
+            return 0, None, None
+            
+        # 检查是否被寄生
+        is_parasited, parasite_owner = self.shop.is_parasited(group_id, user_id)
+        if not is_parasited:
+            user_data['length'] += increase_amount
+            return increase_amount, None, None
+            
+        # 计算被窃取的长度（向上取整）
+        stolen_amount = (increase_amount + 1) // 2
+        actual_increase = increase_amount - stolen_amount
+        
+        # 更新被寄生者的长度
+        user_data['length'] += actual_increase
+        
+        # 更新寄生虫主人的长度
+        parasite_owner_data = self.get_user_data(group_id, parasite_owner)
+        if parasite_owner_data:
+            parasite_owner_data['length'] += stolen_amount
+            parasite_owner_name = parasite_owner_data['nickname']
+        else:
+            parasite_owner_name = "未知用户"
+            
+        # 获取寄生虫剩余时间
+        time_left = self.shop.get_parasite_time_left(group_id, user_id)
+        
+        return actual_increase, stolen_amount, {
+            'owner_name': parasite_owner_name,
+            'time_left': time_left
+        }
+
+    async def _handle_parasite(self, event):
+        """处理寄生命令"""
+        group_id = str(event.message_obj.group_id)
+        user_id = str(event.get_sender_id())
+        nickname = event.get_sender_name()
+
+        # 检查插件是否启用
+        group_data = self.get_group_data(group_id)
+        if not group_data.get('plugin_enabled', False):
+            yield event.plain_result("❌ 插件未启用")
+            return
+
+        # 检查用户是否注册
+        user_data = self.get_user_data(group_id, user_id)
+        if not user_data:
+            yield event.plain_result("❌ 请先注册牛牛")
+            return
+
+        # 检查用户是否有待使用的寄生虫
+        if not self.last_actions.get(group_id, {}).get(user_id, {}).get('waiting_for_parasite'):
+            yield event.plain_result("❌ 请先购买牛牛寄生虫")
+            return
+
+        # 解析目标用户
+        target_id = None
+        for comp in event.message_obj.message:
+            if isinstance(comp, At):
+                target_id = str(comp.qq)
+                break
+
+        # 如果没有@，尝试从消息中解析用户名
+        if not target_id:
+            msg = event.message_str.strip()
+            if msg.startswith("寄生"):
+                target_name = msg[2:].strip()
+                if target_name:
+                    for uid, data in group_data.items():
+                        if isinstance(data, dict) and 'nickname' in data:
+                            if target_name in data['nickname']:
+                                target_id = uid
+                                break
+
+        if not target_id:
+            yield event.plain_result("❌ 请指定要寄生的目标用户")
+            return
+
+        if target_id == user_id:
+            yield event.plain_result("❌ 不能寄生自己")
+            return
+
+        # 使用寄生虫
+        async for result in self.shop.use_parasite(event, target_id):
+            yield result
+
+    async def _admin_direct_transfer(self, event, target_id, amount):
+        """管理员直接转账
+        
+        Args:
+            event: 消息事件
+            target_id: 目标用户ID
+            amount: 转账金额
+        """
+        group_id = str(event.message_obj.group_id)
+        user_id = str(event.get_sender_id())
+        nickname = event.get_sender_name()
+        
+        # 检查插件是否启用
+        group_data = self.get_group_data(group_id)
+        if not group_data.get('plugin_enabled', False):
+            yield event.plain_result("❌ 插件未启用")
+            return
+            
+        # 检查目标用户是否存在
+        target_data = self.get_user_data(group_id, target_id)
+        if not target_data:
+            yield event.plain_result("❌ 目标用户未注册牛牛")
+            return
+            
+        # 获取目标用户昵称
+        target_nickname = target_data.get('nickname', '未知用户')
+        
+        # 直接增加目标用户金币
+        target_data['coins'] = target_data.get('coins', 0) + amount
+        
+        # 保存数据
+        self._save_niuniu_lengths()
+        
+        # 发送成功消息
+        result = (
+            f"✅ 管理员 {nickname} 成功转账！\n"
+            f"金额：{amount}金币\n"
+            f"接收者：{target_nickname}\n"
+            f"接收者当前余额：{target_data.get('coins', 0)}金币"
+        )
         yield event.plain_result(result)
 
