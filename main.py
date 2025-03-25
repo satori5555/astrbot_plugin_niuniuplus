@@ -67,6 +67,11 @@ class NiuniuPlugin(Star):
         self.market = NiuniuMarket(self)
         # 初始化税收系统
         self.tax_system = TaxSystem(self)
+        # 初始化打工任务字典
+        self._work_tasks = {}  # 添加这一行
+        
+        # 从 last_actions 中恢复正在进行的打工任务
+        self._restore_work_tasks()
         
         # 保留变性手术监控任务
         asyncio.create_task(self.shop.monitor_gender_surgeries())
@@ -78,6 +83,52 @@ class NiuniuPlugin(Star):
         # 确保更新记录文件存在
         if not os.path.exists(UPDATES_FILE):
             self._create_default_updates_file()
+            
+    def _restore_work_tasks(self):
+        """从 last_actions 中恢复打工任务"""
+        current_time = time.time()
+        for group_id, users in self.last_actions.items():
+            for user_id, user_actions in users.items():
+                if 'work_data' in user_actions:
+                    work_data = user_actions['work_data']
+                    if not self._is_user_working(group_id, user_id):
+                        # 如果用户不再工作中，清理数据
+                        del user_actions['work_data']
+                        continue
+                        
+                    # 计算剩余时间
+                    end_time = work_data['start_time'] + work_data['duration'] * 3600
+                    remaining_seconds = end_time - current_time
+                    
+                    if remaining_seconds <= 0:
+                        # 如果已经结束，清理数据
+                        del user_actions['work_data']
+                        continue
+                        
+                    # 获取用户昵称
+                    nickname = self.get_user_data(group_id, user_id).get('nickname', '用户')
+                    
+                    # 创建虚拟任务信息
+                    coins_per_hour = (3600 // self.WORK_REWARD_INTERVAL) * self.WORK_REWARD_COINS
+                    multiplier = self.shop.get_work_multiplier(group_id, user_id) if hasattr(self, 'shop') else 1
+                    total_coins = int(coins_per_hour * work_data['duration'] * multiplier)
+                    
+                    task_id = f"work_{group_id}_{user_id}_{int(work_data['start_time'])}"
+                    self._work_tasks[task_id] = {
+                        'task': asyncio.create_task(self._work_timer_improved(
+                            group_id=group_id,
+                            user_id=user_id,
+                            nickname=nickname,
+                            unified_msg_origin=None,  # 无法恢复原始消息来源
+                            delay_seconds=int(remaining_seconds)
+                        )),
+                        'coins': total_coins,
+                        'hours': work_data['duration'],
+                        'start_time': work_data['start_time']
+                    }
+        
+        # 保存可能的更改
+        self._save_last_actions()
 
     # region 数据管理
     def _create_niuniu_lengths_file(self):
@@ -903,7 +954,7 @@ class NiuniuPlugin(Star):
         elapsed_time = time.time() - task_info['start_time']
         total_time = task_info['hours'] * 3600
         remaining_ratio = (total_time - elapsed_time) / total_time
-        coins_to_deduct = int(task_info['coins'] * remaining_ratio)
+        coins_to_deduct = int(task_info['coins'] * remaining_ratio)  # 向下取整
         
         # Get user data and update coins
         user_data = self.get_user_data(group_id, user_id)
@@ -928,8 +979,8 @@ class NiuniuPlugin(Star):
 
         # Send notification
         yield event.plain_result(
-            f"💔 小南娘：{nickname}受不了被狠狠蹂躏，直接逃跑了！\n"
-            f"被扣除了{coins_to_deduct}金币，并且被额外罚款50金币\n"
+            f"小南娘：{nickname}受不了蹂躏逃跑啦，客户很生气，扣除了你剩余服务时间对应的{coins_to_deduct}金币，"
+            f"并额外罚款了50金币，下次可别再这样了哦！\n"
             f"当前金币余额：{user_data['coins']}"
         )
     # endregion

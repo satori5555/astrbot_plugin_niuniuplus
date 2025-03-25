@@ -296,12 +296,22 @@ class NiuniuMarket:
         length = item['length']
         hardness = item['hardness']
         
-        # 恢复用户牛牛
+        # 计算下架罚款 - 扣除30%的牛牛长度（向下取整）
+        penalty_length = math.floor(length * 0.3)
+        returned_length = length - penalty_length
+        
+        # 计算扣除长度对应的金币(每20cm=1金币，向下取整)
+        penalty_coins = math.floor(penalty_length / 20)
+        
+        # 恢复用户牛牛(减少后的长度)
         user_data = self.plugin.get_user_data(group_id, user_id)
         if user_data:
-            user_data['length'] = length
+            user_data['length'] = returned_length
             user_data['hardness'] = hardness
             
+        # 将罚款金币添加到群账户
+        self.plugin.tax_system.add_tax_to_treasury(group_id, penalty_coins)
+        
         # 从集市中移除商品
         del self.market_data['groups'][group_id][item_id]
         
@@ -312,7 +322,17 @@ class NiuniuMarket:
         self.plugin._save_niuniu_lengths()
         self._save_market_data()
         
-        return True, f"✅ 成功下架牛牛！\n长度: {self.plugin.format_length(length)}\n硬度: {hardness}"
+        # 获取当前群账户余额
+        group_balance = self.plugin.tax_system.get_treasury_balance(group_id)
+        
+        return True, (
+            f"✅ 成功下架牛牛！\n"
+            f"原长度: {self.plugin.format_length(length)}\n"
+            f"罚款: {self.plugin.format_length(penalty_length)} ({penalty_coins}金币)\n"
+            f"返还长度: {self.plugin.format_length(returned_length)}\n"
+            f"硬度: {hardness}\n"
+            f"群账户余额: {group_balance}金币"
+        )
 
     def _reorder_items(self, group_id: str):
         """重新排序指定群组的商品ID"""
@@ -351,7 +371,8 @@ class NiuniuMarket:
             "♻️ 回收牛牛 - 直接回收自己的牛牛（每20cm=1金币）",
             "",
             "⚠️ 注意：变性状态下无法使用牛牛集市",
-            "⚠️ 上架或回收牛牛后，你的牛牛长度将变为0"
+            "⚠️ 上架或回收牛牛后，你的牛牛长度将变为0",
+            "⚠️ 下架牛牛将被罚款30%的长度（取整），罚款进入群账户"
         ]
         return "\n".join(menu)
 
