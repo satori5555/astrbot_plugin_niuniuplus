@@ -184,7 +184,7 @@ class NiuniuPlugin(Star):
 🔹 每日签到 - 领取金币奖励
 🔹 牛牛商城 - 购买强力道具
 🔹 牛牛背包 - 查看拥有道具
-🔹 打工 - 赚取金币
+🔹 打工xx小时 - 赚取金币
 🔹 送金币 @对方 - 转赠金币
 🔹 牛牛开/关 - 管理插件"""
             },
@@ -637,12 +637,17 @@ class NiuniuPlugin(Star):
         msg = event.message_str.strip()
         if msg.startswith("打工"):
             msg = msg[len("打工"):].strip()
-        
-        try:
-            hours = float(msg)
-        except ValueError:
-            yield event.plain_result("❌ 请输入正确的打工时长，例如：打工 1.5")
-            return
+            
+        # 匹配新格式：打工XX小时
+        match = re.match(r'^(\d+(?:\.\d+)?)小时$', msg)
+        if match:
+            hours = float(match.group(1))
+        else:
+            try:
+                hours = float(msg)
+            except ValueError:
+                yield event.plain_result("❌ 请输入正确的打工时长，例如：打工6小时")
+                return
             
         if hours <= 0:
             yield event.plain_result("❌ 打工时长必须大于0")
