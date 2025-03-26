@@ -17,6 +17,17 @@ class TaxSystem:
         self.tax_file = os.path.join('data', 'niuniu_tax.yml')
         self.tax_data = self._load_tax_data()
         
+        # 确保groups字典存在
+        if 'groups' not in self.tax_data:
+            self.tax_data['groups'] = {}
+        
+        # 初始化赋税开关状态
+        if 'tax_enabled' not in self.tax_data:
+            self.tax_data['tax_enabled'] = {}
+        
+        # 保存初始数据
+        self._save_tax_data()
+        
     def _load_tax_data(self) -> dict:
         """加载税收数据"""
         if not os.path.exists(self.tax_file):
@@ -113,6 +124,10 @@ class TaxSystem:
         Returns:
             Tuple[int, int]: (税后金额, 税额)
         """
+        # 检查赋税是否开启
+        if not self.is_tax_enabled(group_id):
+            return amount, 0  # 赋税未开启，返回全额金币
+            
         after_tax, tax = self.calculate_tax(amount)
         if tax > 0:
             self.add_tax_to_treasury(group_id, tax)
@@ -125,6 +140,7 @@ class TaxSystem:
             "📊 群账户 - 查看群账户余额",
             "💸 群账户 发工资 [金额] - 使用群账户余额发放工资（平分）",
             "💵 群账户 转账 @用户 [金额] - 使用群账户余额转账给指定用户",
+            "🔄 开启赋税/关闭赋税 - 控制是否收税",
             "",
             "⚠️ 注意：只有管理员才能使用群账户功能"
         ]
@@ -199,4 +215,35 @@ class TaxSystem:
         self.plugin._save_niuniu_lengths()
         
         target_nickname = target_data.get('nickname', '未知用户')
-        return True, f"✅ 成功转账！\n金额：{amount}金币\n接收者：{target_nickname}\n当前群账户余额：{self.get_treasury_balance(group_id)}金币" 
+        return True, f"✅ 成功转账！\n金额：{amount}金币\n接收者：{target_nickname}\n当前群账户余额：{self.get_treasury_balance(group_id)}金币"
+        
+    def is_tax_enabled(self, group_id: str) -> bool:
+        """检查群组的赋税是否开启
+        
+        Args:
+            group_id: 群ID
+            
+        Returns:
+            bool: 赋税是否开启
+        """
+        if not isinstance(group_id, str):
+            group_id = str(group_id)
+            
+        # 默认开启赋税
+        return self.tax_data.get('tax_enabled', {}).get(group_id, True)
+        
+    def set_tax_status(self, group_id: str, enabled: bool) -> None:
+        """设置群组的赋税状态
+        
+        Args:
+            group_id: 群ID
+            enabled: 是否开启赋税
+        """
+        if not isinstance(group_id, str):
+            group_id = str(group_id)
+            
+        if 'tax_enabled' not in self.tax_data:
+            self.tax_data['tax_enabled'] = {}
+            
+        self.tax_data['tax_enabled'][group_id] = enabled
+        self._save_tax_data() 

@@ -27,7 +27,7 @@ from niuniu_market import NiuniuMarket
 from tax_system import TaxSystem
 
 # 常量定义
-PLUGIN_DIR = os.path.join('data', 'plugins', 'astrbot_plugin_niuniu')
+PLUGIN_DIR = os.path.join('data', 'plugins', 'astrbot_plugin_niuniuplus')
 os.makedirs(PLUGIN_DIR, exist_ok=True)
 NIUNIU_LENGTHS_FILE = os.path.join('data', 'niuniu_lengths.yml')
 NIUNIU_TEXTS_FILE = os.path.join(PLUGIN_DIR, 'niuniu_game_texts.yml')
@@ -349,10 +349,24 @@ class NiuniuPlugin(Star):
         return remaining > 0, remaining
 
     def parse_at_target(self, event):
-        """解析@目标"""
+        """解析@目标或用户名"""
+        # 先尝试获取@的用户
         for comp in event.message_obj.message:
             if isinstance(comp, At):
                 return str(comp.qq)
+                
+        # 如果没有@，则解析消息中的用户名
+        msg = event.message_str.strip()
+        # 获取命令后的用户名部分
+        target_name = msg.split(maxsplit=1)[1] if len(msg.split()) > 1 else ""
+        if target_name:
+            group_id = str(event.message_obj.group_id)
+            group_data = self.get_group_data(group_id)
+            for user_id, user_data in group_data.items():
+                if isinstance(user_data, dict):  # 检查 user_data 是否为字典
+                    nickname = user_data.get('nickname', '')
+                    if re.search(re.escape(target_name), nickname, re.IGNORECASE):
+                        return user_id
         return None
 
     def parse_target(self, event):
@@ -421,7 +435,8 @@ class NiuniuPlugin(Star):
 
     # region 事件处理
     niuniu_commands = ["牛牛菜单", "牛牛开", "牛牛关", "注册牛牛", "打胶", "我的牛牛", "比划比划", "牛牛排行", "锁牛牛", "打工", "打工时间", "牛牛日历", 
-                       "牛牛商城", "牛牛背包", "每日签到", "送金币", "发红包", "抢红包", "牛牛集市", "群账户", "管理员转账"]  # 添加群账户命令
+                       "牛牛商城", "牛牛背包", "每日签到", "送金币", "发红包", "抢红包", "牛牛集市", "群账户", "管理员转账", 
+                       "开启赋税", "关闭赋税"]  # 添加赋税控制命令
 
     @event_message_type(EventMessageType.GROUP_MESSAGE)
     async def on_group_message(self, event: AstrMessageEvent):
@@ -488,7 +503,7 @@ class NiuniuPlugin(Star):
             return
             
         # 添加解锁命令处理
-        if msg == "解锁绝育":
+        if msg == "解锁绝育" or msg == "解除绝育":
             async for result in self.shop.unlock_sterilization(event):
                 yield result
             return
@@ -538,7 +553,8 @@ class NiuniuPlugin(Star):
             if msg == "群账户":
                 # 显示群账户余额
                 balance = self.tax_system.get_treasury_balance(group_id)
-                yield event.plain_result(f"💰 群账户余额：{balance}金币\n\n{self.tax_system.show_treasury_menu()}")
+                tax_status = "✅ 已开启" if self.tax_system.is_tax_enabled(group_id) else "❌ 已关闭"
+                yield event.plain_result(f"💰 群账户余额：{balance}金币\n💹 赋税状态：{tax_status}\n\n{self.tax_system.show_treasury_menu()}")
                 
             elif msg.startswith("群账户 发工资"):
                 try:
@@ -571,6 +587,27 @@ class NiuniuPlugin(Star):
                     yield event.plain_result("❌ 请输入正确的金额，例如：群账户 转账 @用户 1000")
                 return
 
+        # 处理赋税开关命令
+        if msg == "开启赋税" or msg == "启用赋税":
+            user_id = str(event.get_sender_id())
+            if not self.is_admin(user_id):
+                yield event.plain_result("❌ 只有管理员才能控制赋税")
+                return
+                
+            self.tax_system.set_tax_status(group_id, True)
+            yield event.plain_result("✅ 赋税已开启！群内所有收入将按比例缴纳税款")
+            return
+                
+        if msg == "关闭赋税" or msg == "停用赋税":
+            user_id = str(event.get_sender_id())
+            if not self.is_admin(user_id):
+                yield event.plain_result("❌ 只有管理员才能控制赋税")
+                return
+                
+            self.tax_system.set_tax_status(group_id, False)
+            yield event.plain_result("✅ 赋税已关闭！群内所有收入将不再缴纳税款")
+            return
+
         # 处理管理员直接转账命令
         if msg.startswith("管理员转账"):
             user_id = str(event.get_sender_id())
@@ -578,6 +615,30 @@ class NiuniuPlugin(Star):
                 yield event.plain_result("❌ 只有管理员才能使用直接转账功能")
                 return
                 
+            # 解析消息
+            msg = event.message_str.strip()
+            if msg.startswith("管理员转账"):
+                msg = msg[len("管理员转账"):].strip()
+                
+            # 先尝试获取@的用户
+            target_id = None
+            for comp in event.message_obj.message:
+                if isinstance(comp, At):
+                    target_id = str(comp.qq)
+                    break
+                    
+            # 如果没有@，尝试从消息中解析用户名
+            if not target_id:
+                # 尝试从消息中提取用户名和金额
+                parts = msg.split()
+                if len(parts) < 2:  # 至少需要用户名和金额
+                    yield event.plain_result("❌ 请输入正确的格式，例如：管理员转账 用户名 1000")
+                    return
+                    
+            if not target_id:
+                yield event.plain_result("❌ 未找到目标用户")
+                return
+
             # 获取@的目标用户
             target_id = self.parse_at_target(event)
             if not target_id:
@@ -1266,8 +1327,9 @@ class NiuniuPlugin(Star):
             target_name = parts[0]
             # 在群内查找匹配的用户
             for uid, data in group_data.items():
-                if isinstance(data, dict) or 'nickname' in data:
-                    if target_name in data['nickname']:
+                if isinstance(data, dict):  # 检查 user_data 是否为字典
+                    nickname = data.get('nickname', '')
+                    if re.search(re.escape(target_name), nickname, re.IGNORECASE):
                         target_id = uid
                         break
         
@@ -2111,8 +2173,9 @@ class NiuniuPlugin(Star):
             target_name = parts[0]
             # 在群内查找匹配的用户
             for uid, data in group_data.items():
-                if isinstance(data, dict) or 'nickname' in data:
-                    if target_name in data['nickname']:
+                if isinstance(data, dict):  # 检查 user_data 是否为字典
+                    nickname = data.get('nickname', '')
+                    if re.search(re.escape(target_name), nickname, re.IGNORECASE):
                         target_id = uid
                         break
         
