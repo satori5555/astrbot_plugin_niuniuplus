@@ -43,7 +43,7 @@ class TaxSystem:
                     
             return data
         except Exception as e:
-            self.plugin.context.logger.error(f"加载税收数据失败: {str(e)}")
+            logger.error(f"加载税收数据失败: {str(e)}")
             return {'groups': {}}
             
     def _save_tax_data(self):
@@ -53,7 +53,7 @@ class TaxSystem:
             with open(self.tax_file, 'w', encoding='utf-8') as f:
                 yaml.dump(self.tax_data, f, allow_unicode=True)
         except Exception as e:
-            self.plugin.context.logger.error(f"保存税收数据失败: {str(e)}")
+            logger.error(f"保存税收数据失败: {str(e)}")
             
     def calculate_tax(self, amount: int) -> Tuple[int, int]:
         """计算应缴税额

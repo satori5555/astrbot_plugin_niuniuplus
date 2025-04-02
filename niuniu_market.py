@@ -38,7 +38,7 @@ class NiuniuMarket:
                     
             return data
         except Exception as e:
-            self.plugin.context.logger.error(f"加载集市数据失败: {str(e)}")
+            logger.error(f"加载集市数据失败: {str(e)}")
             return {'groups': {}, 'next_id': {}}
             
     def _save_market_data(self):
@@ -48,7 +48,7 @@ class NiuniuMarket:
             with open(self.market_file, 'w', encoding='utf-8') as f:
                 yaml.dump(self.market_data, f, allow_unicode=True)
         except Exception as e:
-            self.plugin.context.logger.error(f"保存集市数据失败: {str(e)}")
+            logger.error(f"保存集市数据失败: {str(e)}")
             
     def list_market(self) -> str:
         """查看集市上的牛牛列表"""
@@ -420,7 +420,7 @@ class NiuniuMarket:
                 success, result = self.buy_niuniu(group_id, user_id, item_id)
                 yield event.plain_result(result)
             except Exception as e:
-                self.plugin.context.logger.error(f"购买牛牛出错: {str(e)}")
+                logger.error(f"购买牛牛出错: {str(e)}")
                 yield event.plain_result(f"❌ 购买失败: {str(e)}")
 
         elif msg.startswith("上架牛牛"):
@@ -445,7 +445,7 @@ class NiuniuMarket:
                 success, result = self.remove_niuniu(group_id, user_id, item_id)
                 yield event.plain_result(result)
             except Exception as e:
-                self.plugin.context.logger.error(f"下架牛牛出错: {str(e)}")
+                logger.error(f"下架牛牛出错: {str(e)}")
                 yield event.plain_result(f"❌ 下架失败: {str(e)}")
 
         elif msg == "回收牛牛":

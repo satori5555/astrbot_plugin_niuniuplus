@@ -249,11 +249,11 @@ class NiuniuRedPacket:
                             ])
                             await self.context.send_message(unified_msg_origin, message_chain)
                         except Exception as e:
-                            self.context.logger.error(f"发送红包过期提醒失败: {e}")
+                            logger.error(f"发送红包过期提醒失败: {e}")
                 
                 # 清理红包数据
                 del self.red_packets[group_id][packet_id]
                 if not self.red_packets[group_id]:
                     del self.red_packets[group_id]
         except Exception as e:
-            self.context.logger.error(f"红包过期处理异常: {e}")
+            logger.error(f"红包过期处理异常: {e}")

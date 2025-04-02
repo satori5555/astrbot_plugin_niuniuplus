@@ -137,7 +137,7 @@ class NiuniuPlugin(Star):
             with open(NIUNIU_LENGTHS_FILE, 'w', encoding='utf-8') as f:
                 yaml.dump({}, f)
         except Exception as e:
-            self.context.logger.error(f"创建文件失败: {str(e)}")
+            logger.error(f"创建文件失败: {str(e)}")
 
     def _load_niuniu_lengths(self):
         """加载牛牛数据"""
@@ -157,7 +157,7 @@ class NiuniuPlugin(Star):
                     group_data['plugin_enabled'] = False
             return data
         except Exception as e:
-            self.context.logger.error(f"加载数据失败: {str(e)}")
+            logger.error(f"加载数据失败: {str(e)}")
             return {}
 
     def _load_niuniu_texts(self):
@@ -270,7 +270,7 @@ class NiuniuPlugin(Star):
                     custom_texts = yaml.safe_load(f) or {}
                     return self._deep_merge(default_texts, custom_texts)
         except Exception as e:
-            self.context.logger.error(f"加载文本失败: {str(e)}")
+            logger.error(f"加载文本失败: {str(e)}")
         return default_texts
 
     def _deep_merge(self, base, update):
@@ -288,7 +288,7 @@ class NiuniuPlugin(Star):
             with open(NIUNIU_LENGTHS_FILE, 'w', encoding='utf-8') as f:
                 yaml.dump(self.niuniu_lengths, f, allow_unicode=True)
         except Exception as e:
-            self.context.logger.error(f"保存失败: {str(e)}")
+            logger.error(f"保存失败: {str(e)}")
 
     def _load_last_actions(self):
         """加载冷却数据"""
@@ -304,7 +304,7 @@ class NiuniuPlugin(Star):
             with open(LAST_ACTION_FILE, 'w', encoding='utf-8') as f:
                 yaml.dump(self.last_actions, f, allow_unicode=True)
         except Exception as e:
-            self.context.logger.error(f"保存冷却数据失败: {str(e)}")
+            logger.error(f"保存冷却数据失败: {str(e)}")
 
     def _load_admins(self):
         """加载管理员列表"""
@@ -313,7 +313,7 @@ class NiuniuPlugin(Star):
                 config = json.load(f)
                 return config.get('admins_id', [])
         except Exception as e:
-            self.context.logger.error(f"加载管理员列表失败: {str(e)}")
+            logger.error(f"加载管理员列表失败: {str(e)}")
             return []
 
     def is_admin(self, user_id):
@@ -934,7 +934,7 @@ class NiuniuPlugin(Star):
             await self.context.send_message(unified_msg_origin, message_chain)
             
             # 记录日志
-            self.context.logger.info(f"已向用户 {user_id} 发送打工结束提醒")
+            logger.info(f"已向用户 {user_id} 发送打工结束提醒")
             
             # 清理用户的打工状态
             try:
@@ -943,10 +943,10 @@ class NiuniuPlugin(Star):
                     del user_actions['work_data']
                     self._save_last_actions()
             except Exception as e:
-                self.context.logger.error(f"清理打工状态失败: {e}")
+                logger.error(f"清理打工状态失败: {e}")
                 
         except Exception as e:
-            self.context.logger.error(f"打工定时器执行异常: {e}")
+            logger.error(f"打工定时器执行异常: {e}")
 
     async def _check_work_time(self, event):
         """查看打工时间"""
@@ -1093,10 +1093,10 @@ class NiuniuPlugin(Star):
                         
                 # 保存数据
                 self._save_niuniu_lengths()
-                self.context.logger.info("已重置所有用户的连胜数据并更新牛王")
+                logger.info("已重置所有用户的连胜数据并更新牛王")
                 
             except Exception as e:
-                self.context.logger.error(f"重置连胜数据失败: {e}")
+                logger.error(f"重置连胜数据失败: {e}")
 
     async def _toggle_plugin(self, event, enable):
         """开关插件"""
@@ -2383,7 +2383,7 @@ class NiuniuPlugin(Star):
                 f.write("- 初始化更新记录文件\n")
                 f.write("- 添加查看更新功能\n")
         except Exception as e:
-            self.context.logger.error(f"创建更新记录文件失败: {str(e)}")
+            logger.error(f"创建更新记录文件失败: {str(e)}")
 
     # 添加查看更新记录的方法
     def _read_updates(self):
@@ -2395,7 +2395,7 @@ class NiuniuPlugin(Star):
             else:
                 return "未找到更新记录"
         except Exception as e:
-            self.context.logger.error(f"读取更新记录失败: {str(e)}")
+            logger.error(f"读取更新记录失败: {str(e)}")
             return f"读取更新记录失败: {str(e)}"
 
     # 添加显示更新记录的命令处理
