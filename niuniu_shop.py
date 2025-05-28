@@ -14,7 +14,7 @@ class NiuniuShop:
         3: {"name": "六味地黄丸", "price": 100, "description": "下次比划必胜"},
         4: {"name": "绝育环", "price": 150, "description": "使目标用户无法进行打胶，目标可花费150金币使用指令\"解锁绝育\"或\"解除绝育\"解锁"},
         5: {"name": "暂时变性手术", "price": 100, "description": "牛牛变为0cm，24h后恢复，期间打工金币翻倍"},
-        6: {"name": "牛子转换器", "price": 500, "description": "可以与目标用户的牛牛长度对调"},
+        6: {"name": "牛子转换器", "price": 500, "description": "5%概率与目标用户的牛牛长度对调"},
         7: {"name": "春风精灵", "price": 50, "description": "1小时内每次冷却完毕自动打胶并提醒"},
         8: {"name": "神秘礼盒", "price": 150, "description": "随机获得一件商品或金币奖励"},
         9: {"name": "牛牛寄生虫", "price": 200, "description": "24小时内目标用户牛牛增长的50%会被你窃取"}
@@ -775,6 +775,35 @@ class NiuniuShop:
             
         return True, parasite_info['parasite_owner']
 
+
+    async def unlock_sterilization(self, event):
+        """处理解锁绝育指令"""
+        group_id = str(event.message_obj.group_id)
+        user_id = str(event.get_sender_id())
+        nickname = event.get_sender_name()
+        user_data = self.plugin.get_user_data(group_id, user_id)
+
+        if not user_data:
+            yield event.plain_result("❌ 请先注册牛牛")
+            return
+
+        if 'items' not in user_data or not user_data['items'].get('sterilized', False):
+            yield event.plain_result("✅ 你目前没有被绝育，无需解锁")
+            return
+
+        coins = user_data.get('coins', 0)
+        cost = 150
+        if coins < cost:
+            yield event.plain_result(f"❌ 解锁绝育需要{cost}金币，你只有{coins}金币")
+            return
+
+        # 扣钱并解锁
+        user_data['coins'] -= cost
+        user_data['items']['sterilized'] = False
+        self._save_data()
+
+        yield event.plain_result(f"🔓 {nickname} 成功解锁了绝育，现在可以自由打胶啦！\n💸 扣除{cost}金币")
+
     def get_parasite_time_left(self, group_id, user_id):
         """获取寄生虫剩余时间"""
         user_data = self.plugin.get_user_data(group_id, user_id)
@@ -874,85 +903,52 @@ class NiuniuShop:
         yield event.plain_result(f"🔒 {nickname} 成功给 {target_nickname} 戴上了绝育环！\n"
                                f"ta将无法打胶，可以用命令\"解锁绝育\"或\"解除绝育\"并支付150金币解锁")
 
+
     async def use_exchanger(self, event, target_id):
-        """使用牛子转换器"""
+        """使用牛子转换器（5% 成功调换牛牛长度，95% 失败）"""
         group_id = str(event.message_obj.group_id)
         user_id = str(event.get_sender_id())
         nickname = event.get_sender_name()
-        
+
         # 检查目标用户是否存在
         target_data = self.plugin.get_user_data(group_id, target_id)
         if not target_data:
             yield event.plain_result("❌ 目标用户未注册牛牛")
             return
-        
+
         # 清除使用标记
         user_actions = self.last_actions.get(group_id, {}).get(user_id, {})
         if 'waiting_for_exchange' in user_actions:
             del user_actions['waiting_for_exchange']
-        
-        # 检查目标用户是否在变性状态
+
+        # 检查双方变性状态
         if self.is_gender_surgery_active(group_id, target_id):
             yield event.plain_result("❌ 目标用户正处于变性状态，无法调换牛牛长度")
             return
-            
-        # 检查自己是否在变性状态
         if self.is_gender_surgery_active(group_id, user_id):
             yield event.plain_result("❌ 你正处于变性状态，无法调换牛牛长度")
             return
-            
-        # 交换牛牛长度
+
+        # 获取数据
         user_data = self.plugin.get_user_data(group_id, user_id)
         user_length = user_data['length']
         target_length = target_data['length']
-        
-        user_data['length'] = target_length
-        target_data['length'] = user_length
-        
-        # 清除道具
-        if 'exchanger' in user_data.get('items', {}):
-            del user_data['items']['exchanger']
-            
-        self._save_data()
-        
         target_nickname = target_data['nickname']
-        yield event.plain_result(f"🔄 {nickname} 使用牛子转换器与 {target_nickname} 的牛牛长度调换成功！\n"
-                               f"你的牛牛长度：{self.plugin.format_length(target_length)}\n"
-                               f"{target_nickname} 的牛牛长度：{self.plugin.format_length(user_length)}")
 
-    async def unlock_sterilization(self, event):
-        """解除绝育功能"""
-        group_id = str(event.message_obj.group_id)
-        user_id = str(event.get_sender_id())
-        nickname = event.get_sender_name()
-        
-        # 检查插件是否启用
-        group_data = self.plugin.get_group_data(group_id)
-        if not group_data.get('plugin_enabled', False):
-            yield event.plain_result("❌ 插件未启用")
-            return
-            
-        # 检查用户是否注册
-        user_data = self.plugin.get_user_data(group_id, user_id)
-        if not user_data:
-            yield event.plain_result("❌ 请先注册牛牛")
-            return
-            
-        # 检查用户是否被绝育
-        if not self.is_sterilized(group_id, user_id):
-            yield event.plain_result("❌ 你没有被绝育，无需解锁")
-            return
-            
-        # 检查金币是否足够
-        if user_data.get('coins', 0) < 150:
-            yield event.plain_result("❌ 解除绝育需要150金币，金币不足")
-            return
-            
-        # 扣除金币并解除绝育
-        user_data['coins'] -= 150
-        # 确保items字典存在再删除
-        if 'items' in user_data and 'sterilized' in user_data['items']:
-            del user_data['items']['sterilized']
-        self._save_data()
-        
-        yield event.plain_result(f"✅ {nickname} 成功解除绝育，花费150金币\n💰 剩余金币：{user_data['coins']}")
+        if random.random() <= 0.05:
+            user_data['length'] = target_length
+            target_data['length'] = user_length
+            if 'exchanger' in user_data.get('items', {}):
+                del user_data['items']['exchanger']
+            self._save_data()
+            yield event.plain_result(f"🔄 {nickname} 使用牛子转换器与 {target_nickname} 的牛牛长度调换成功！\n"
+                                     f"你的牛牛长度：{self.plugin.format_length(target_length)}\n"
+                                     f"{target_nickname} 的牛牛长度：{self.plugin.format_length(user_length)}")
+        else:
+            if 'exchanger' in user_data.get('items', {}):
+                del user_data['items']['exchanger']
+            self._save_data()
+            yield event.plain_result(f"💥 {nickname} 使用牛子转换器试图调换 {target_nickname} 的牛牛长度，但失败了！\n"
+                                     f"💸 道具已失效，牛牛保持不变")
+
+

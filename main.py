@@ -43,7 +43,7 @@ class NiuniuPlugin(Star):
     COMPARE_COOLDOWN = 180   # 比划冷却
     LOCK_COOLDOWN = 300      # 锁牛牛冷却时间 5分钟
     INVITE_LIMIT = 3         # 邀请次数限制
-    MAX_WORK_HOURS = 6       # 最大打工时长（小时）
+    MAX_WORK_HOURS = 8       # 最大打工时长（小时）
     WORK_REWARD_INTERVAL = 600  # 打工奖励间隔（秒）
     WORK_REWARD_COINS = 5     # 每10分钟打工奖励金币数
 
