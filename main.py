@@ -664,6 +664,7 @@ class NiuniuPlugin(Star):
             "牛牛关": lambda event: self._toggle_plugin(event, False),
             "注册牛牛": self._register,
             "打胶": self._dajiao,
+            "批量打胶": self._batch_dajiao,    # 新增：批量打胶命令
             "我的牛牛": self._show_status,
             "比划比划": self._compare,
             "牛牛排行": self._show_ranking,
@@ -683,16 +684,81 @@ class NiuniuPlugin(Star):
                     yield result
                 return
 
+    # 私聊时也要拦截“批量打胶”命令（新增）
     @event_message_type(EventMessageType.PRIVATE_MESSAGE)
     async def on_private_message(self, event: AstrMessageEvent):
         """私聊消息处理器"""
         msg = event.message_str.strip()
-        niuniu_commands = ["牛牛菜单", "牛牛开", "牛牛关", "注册牛牛", "打胶", "我的牛牛", "比划比划", "牛牛排行","锁牛牛"]
-        
+        niuniu_commands = ["牛牛菜单", "牛牛开", "牛牛关", "注册牛牛", 
+                        "打胶", "批量打胶",   # 新增：拦截批量打胶
+                        "我的牛牛", "比划比划", "牛牛排行", "锁牛牛"]
         if any(msg.startswith(cmd) for cmd in niuniu_commands):
             yield event.plain_result("不许一个人偷偷玩牛牛")
-        else:
             return
+
+ 
+        """批量打胶功能：使用所有伟哥次数逐次打胶"""
+        group_id = str(event.message_obj.group_id)
+        user_id = str(event.get_sender_id())
+        nickname = event.get_sender_name()
+
+        group_data = self.get_group_data(group_id)
+        if not group_data.get('plugin_enabled', False):
+            yield event.plain_result("❌ 插件未启用")
+            return
+
+        user_data = self.get_user_data(group_id, user_id)
+        if not user_data:
+            text = self.niuniu_texts['dajiao']['not_registered'].format(nickname=nickname)
+            yield event.plain_result(text)
+            return
+
+        # 检查用户是否在打工中（复用已有逻辑）
+        if self._is_user_working(group_id, user_id):
+            yield event.plain_result(f"小南娘：{nickname}，服务的时候要认真哦！")
+            return
+
+        # 检查是否被绝育
+        if self.shop.is_sterilized(group_id, user_id):
+            yield event.plain_result(f"❌ {nickname}，你已被绝育，需要花费150金币解锁")
+            return
+
+        # 检查变性状态
+        if self.shop.is_gender_surgery_active(group_id, user_id):
+            yield event.plain_result(f"❌ {nickname}，变性状态下牛牛无法变长哦~")
+            return
+
+        # 检查并获取伟哥次数
+        items = user_data.get('items', {})
+        viagra_count = items.get('viagra', 0)
+        if viagra_count <= 0:
+            yield event.plain_result(f"❌ {nickname}，你没有伟哥可用！")
+            return
+
+        # 循环消耗所有伟哥，逐次打胶
+        for i in range(viagra_count):
+            remaining = self.shop.use_viagra_for_dajiao(group_id, user_id)
+            # 如果使用失败，跳出循环
+            if remaining is False:
+                break
+            # 随机固定增加 10-20cm
+            change = random.randint(10, 20)
+            actual_increase, stolen_amount, parasite_info = self._handle_length_increase(group_id, user_id, change)
+            # 更新最后使用伟哥时间（记录历史）
+            current_time = time.time()
+            self.last_actions.setdefault(group_id, {}).setdefault(user_id, {})['last_viagra_use'] = current_time
+            self._save_last_actions()
+            self._save_niuniu_lengths()
+
+            # 构建消息
+            parts = [f"💊 使用伟哥打胶成功！({('剩余'+str(remaining)+'次') if remaining>0 else '已用完'})"]
+            parts.append(f"📏 实际增加: +{actual_increase}cm")
+            if parasite_info:
+                parts.append(f"🦠 被 {parasite_info['owner_name']} 窃取: {stolen_amount}cm")
+                parts.append(f"⏳ 寄生剩余时间: {parasite_info['time_left']}")
+            yield event.plain_result("\n".join(parts))
+        # 结束循环后，所有伟哥已消耗完毕
+            
     def _is_user_working(self, group_id, user_id):
         """检查用户是否在打工中"""
         group_id, user_id = str(group_id), str(user_id)
@@ -1966,6 +2032,80 @@ class NiuniuPlugin(Star):
 
         yield event.plain_result("\n".join(result_msg))
     # endregion
+
+    async def _batch_dajiao(self, event):
+        """批量打胶功能：使用所有伟哥次数，汇总一次性返回"""
+        group_id = str(event.message_obj.group_id)
+        user_id = str(event.get_sender_id())
+        nickname = event.get_sender_name()
+
+        group_data = self.get_group_data(group_id)
+        if not group_data.get('plugin_enabled', False):
+            yield event.plain_result("❌ 插件未启用")
+            return
+
+        user_data = self.get_user_data(group_id, user_id)
+        if not user_data:
+            text = self.niuniu_texts['dajiao']['not_registered'].format(nickname=nickname)
+            yield event.plain_result(text)
+            return
+
+        # 检查打工、绝育、变性
+        if self._is_user_working(group_id, user_id):
+            yield event.plain_result(f"小南娘：{nickname}，服务的时候要认真哦！")
+            return
+        if self.shop.is_sterilized(group_id, user_id):
+            yield event.plain_result(f"❌ {nickname}，你已被绝育，需要花费150金币解锁")
+            return
+        if self.shop.is_gender_surgery_active(group_id, user_id):
+            yield event.plain_result(f"❌ {nickname}，变性状态下牛牛无法变长哦~")
+            return
+
+        # 伟哥次数
+        items = user_data.get('items', {})
+        viagra_count = items.get('viagra', 0)
+        if viagra_count <= 0:
+            yield event.plain_result(f"❌ {nickname}，你没有伟哥可用！")
+            return
+
+        # 批量处理
+        total_increase = 0
+        total_stolen = 0
+        last_parasite_name = None
+        last_time_left = None
+
+        for i in range(viagra_count):
+            remaining = self.shop.use_viagra_for_dajiao(group_id, user_id)
+            if remaining is False:
+                break
+            change = random.randint(10, 20)
+            actual_increase, stolen_amount, parasite_info = self._handle_length_increase(group_id, user_id, change)
+            actual_increase = actual_increase or 0
+            stolen_amount = stolen_amount or 0
+            total_increase += actual_increase
+            total_stolen += stolen_amount
+            if parasite_info:
+                last_parasite_name = parasite_info['owner_name']
+                last_time_left = parasite_info['time_left']
+            current_time = time.time()
+            self.last_actions.setdefault(group_id, {}).setdefault(user_id, {})['last_viagra_use'] = current_time
+
+        self._save_last_actions()
+        self._save_niuniu_lengths()
+
+        # 汇总消息
+        msg_lines = [
+            f"💊 批量打胶完成！",
+            f"📏 总共增长：+{total_increase}cm",
+            f"💊 本次消耗伟哥：{viagra_count}次",
+        ]
+        if total_stolen > 0 and last_parasite_name:
+            msg_lines.append(f"🦠 被 {last_parasite_name} 窃取：{total_stolen}cm")
+            msg_lines.append(f"⏳ 寄生剩余时间: {last_time_left}")
+        elif total_stolen > 0:
+            msg_lines.append(f"🦠 被寄生窃取：{total_stolen}cm")
+
+        yield event.plain_result('\n'.join(msg_lines))
 
     async def _view_sign_calendar(self, event):
         """查看签到日历"""
